@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Atlas Defense Solutions — Software Portfolio Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0b1020;
+    --bg-2: #11172d;
+    --panel: #151b35;
+    --panel-2: #1a2143;
+    --border: #232a4d;
+    --text: #e6e9f5;
+    --muted: #98a2c4;
+    --accent: #6366f1;
+    --accent-2: #22d3ee;
+    --green: #10b981;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --purple: #a855f7;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: radial-gradient(1200px 600px at 0% 0%, #1a2046 0%, var(--bg) 50%) fixed,
+                radial-gradient(900px 600px at 100% 0%, #1a1d3d 0%, transparent 60%) fixed,
+                var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1440px; margin: 0 auto; padding: 32px 28px 64px; }
+
+  /* Header */
+  .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; flex-wrap: wrap; gap: 16px; }
+  .brand { display: flex; align-items: center; gap: 14px; }
+  .logo {
+    width: 44px; height: 44px; border-radius: 12px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; color: white; font-size: 18px;
+    box-shadow: 0 8px 24px rgba(99, 102, 241, .35);
+  }
+  .brand h1 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
+  .brand p  { margin: 2px 0 0; font-size: 13px; color: var(--muted); }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(99,102,241,.12); color: #c7d2fe;
+    border: 1px solid rgba(99,102,241,.35);
+    padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 600;
+  }
+  .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px rgba(16,185,129,.18); }
+
+  /* KPI row */
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 22px; }
+  .kpi {
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+    border: 1px solid var(--border);
+    border-radius: 16px; padding: 20px 22px;
+    position: relative; overflow: hidden;
+  }
+  .kpi::after {
+    content: ""; position: absolute; right: -30px; top: -30px;
+    width: 120px; height: 120px; border-radius: 50%; opacity: .12;
+    background: radial-gradient(circle, var(--accent), transparent 70%);
+  }
+  .kpi .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; font-weight: 600; }
+  .kpi .value { font-size: 30px; font-weight: 700; margin-top: 8px; letter-spacing: -0.02em; }
+  .kpi .sub   { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .kpi.green::after  { background: radial-gradient(circle, var(--green), transparent 70%); }
+  .kpi.amber::after  { background: radial-gradient(circle, var(--amber), transparent 70%); }
+  .kpi.red::after    { background: radial-gradient(circle, var(--red), transparent 70%); }
+
+  /* Section card */
+  .section {
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+    border: 1px solid var(--border);
+    border-radius: 16px; padding: 22px;
+    margin-bottom: 18px;
+  }
+  .section h2 {
+    margin: 0 0 4px; font-size: 16px; font-weight: 700; letter-spacing: -0.01em;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .section .desc { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+  .section h2 .pill {
+    font-size: 11px; padding: 3px 8px; border-radius: 999px;
+    background: rgba(99,102,241,.18); color: #c7d2fe; font-weight: 600;
+  }
+
+  /* Charts row */
+  .charts-row { display: grid; grid-template-columns: 1.4fr 1fr; gap: 18px; margin-bottom: 18px; }
+  .chart-wrap { position: relative; height: 320px; }
+
+  /* Redundancy cards */
+  .redundancy-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  .rcard {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--amber);
+    border-radius: 12px; padding: 16px 18px;
+    display: flex; flex-direction: column; gap: 8px;
+    transition: transform .15s ease, border-color .15s ease;
+  }
+  .rcard:hover { transform: translateY(-1px); border-left-color: var(--accent); }
+  .rcard.high   { border-left-color: var(--red); }
+  .rcard.medium { border-left-color: var(--amber); }
+  .rcard.low    { border-left-color: var(--green); }
+  .rcard .rhead { display: flex; align-items: center; justify-content: space-between; }
+  .rcard .cat { font-weight: 700; font-size: 14px; }
+  .rcard .sev {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
+    padding: 3px 8px; border-radius: 999px;
+  }
+  .rcard.high .sev   { background: rgba(239,68,68,.18); color: #fecaca; }
+  .rcard.medium .sev { background: rgba(245,158,11,.18); color: #fde68a; }
+  .rcard.low .sev    { background: rgba(16,185,129,.18); color: #a7f3d0; }
+  .products { display: flex; flex-wrap: wrap; gap: 6px; }
+  .product-tag {
+    background: rgba(255,255,255,.04);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 11.5px; padding: 4px 9px; border-radius: 6px;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .product-tag .price { color: var(--muted); font-size: 10.5px; }
+  .product-tag.primary { border-color: rgba(34,211,238,.4); background: rgba(34,211,238,.08); }
+  .product-tag.cut { border-color: rgba(239,68,68,.4); background: rgba(239,68,68,.08); text-decoration: line-through; opacity: .8; }
+  .reco { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .reco b { color: var(--text); font-weight: 600; }
+  .savings {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(16,185,129,.12); color: #a7f3d0;
+    border: 1px solid rgba(16,185,129,.3);
+    font-size: 12px; font-weight: 700;
+    padding: 4px 10px; border-radius: 6px;
+    align-self: flex-start;
+  }
+
+  /* Tech debt list */
+  .debt-list { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .debt {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px 18px;
+  }
+  .debt .num {
+    width: 28px; height: 28px; border-radius: 8px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    display: inline-flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 13px; color: white; margin-bottom: 10px;
+  }
+  .debt h3 { margin: 0 0 6px; font-size: 14px; font-weight: 700; }
+  .debt p  { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+  .debt .tag { display: inline-block; margin-top: 10px; font-size: 11px; color: #c7d2fe; background: rgba(99,102,241,.15); padding: 3px 8px; border-radius: 999px; }
+
+  /* Inventory table */
+  .filter-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .filter-row input, .filter-row select {
+    background: var(--bg-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 12px; font-size: 13px; outline: none;
+    font-family: inherit;
+  }
+  .filter-row input:focus, .filter-row select:focus { border-color: var(--accent); }
+  .table-scroll { max-height: 460px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  thead th {
+    position: sticky; top: 0;
+    background: var(--bg-2); color: var(--muted);
+    text-align: left; padding: 10px 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .06em; font-size: 11px;
+    border-bottom: 1px solid var(--border);
+  }
+  tbody td { padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.04); }
+  tbody tr:hover { background: rgba(99,102,241,.04); }
+  tbody tr.flag td:first-child { border-left: 2px solid var(--amber); }
+  .cat-chip {
+    display: inline-block; padding: 2px 8px; border-radius: 999px;
+    font-size: 11px; font-weight: 600;
+    background: rgba(99,102,241,.15); color: #c7d2fe;
+  }
+  .cost { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .cost.free { color: var(--muted); font-weight: 500; }
+
+  footer { color: var(--muted); font-size: 11.5px; text-align: center; margin-top: 24px; }
+
+  @media (max-width: 1080px) {
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+    .charts-row { grid-template-columns: 1fr; }
+    .redundancy-grid { grid-template-columns: 1fr; }
+    .debt-list { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="brand">
+      <div class="logo">AD</div>
+      <div>
+        <h1>Atlas Defense Solutions — Software Portfolio</h1>
+        <p>Executive Dashboard · Redundancy &amp; Technical Debt Analysis</p>
+      </div>
+    </div>
+    <div class="badge"><span class="dot"></span> Data as of May 2026</div>
+  </div>
+
+  <!-- KPIs -->
+  <div class="kpis">
+    <div class="kpi">
+      <div class="label">Applications</div>
+      <div class="value">45</div>
+      <div class="sub">Across 24 functional categories</div>
+    </div>
+    <div class="kpi amber">
+      <div class="label">Annual License Spend</div>
+      <div class="value">$3.36M</div>
+      <div class="sub">Excludes labor &amp; infrastructure</div>
+    </div>
+    <div class="kpi red">
+      <div class="label">Redundant Categories</div>
+      <div class="value">15</div>
+      <div class="sub">$2.69M spent in overlapping spaces</div>
+    </div>
+    <div class="kpi green">
+      <div class="label">Identified Savings</div>
+      <div class="value">$529K</div>
+      <div class="sub">~15.7% annual reduction via consolidation</div>
+    </div>
+  </div>
+
+  <!-- Charts -->
+  <div class="charts-row">
+    <div class="section">
+      <h2>Annual Spend by Category <span class="pill">Top 10</span></h2>
+      <p class="desc">Where the money goes. SIEM, NGFW, and EDR dominate — and each has a known overlap.</p>
+      <div class="chart-wrap"><canvas id="spendChart"></canvas></div>
+    </div>
+    <div class="section">
+      <h2>Tool Sprawl by Domain</h2>
+      <p class="desc">Categories with multiple products are consolidation candidates.</p>
+      <div class="chart-wrap"><canvas id="sprawlChart"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Redundancy Analysis -->
+  <div class="section">
+    <h2>Functional Redundancies <span class="pill">15 overlap clusters</span></h2>
+    <p class="desc">Each cluster groups products that serve the same function. Primary tool retained; legacy/bundled-redundant tools flagged for retirement.</p>
+    <div class="redundancy-grid" id="redundancyGrid"></div>
+  </div>
+
+  <!-- Tech Debt Reduction -->
+  <div class="section">
+    <h2>Technical Debt Reduction Plan <span class="pill">Top 6 plays</span></h2>
+    <p class="desc">Sequenced from highest ROI / lowest risk first. All consolidations preserve CMMC, DoD ICAM, and CUI enclave requirements.</p>
+    <div class="debt-list" id="debtList"></div>
+  </div>
+
+  <!-- Inventory Table -->
+  <div class="section">
+    <h2>Full Software Inventory <span class="pill">45 records</span></h2>
+    <div class="filter-row">
+      <input id="search" placeholder="Search name, vendor, function..." style="flex:1; min-width: 240px;" />
+      <select id="catFilter"><option value="">All categories</option></select>
+      <select id="flagFilter">
+        <option value="">All items</option>
+        <option value="flag">Only redundancy candidates</option>
+      </select>
+    </div>
+    <div class="table-scroll">
+      <table id="inv">
+        <thead>
+          <tr>
+            <th>Product</th>
+            <th>Vendor</th>
+            <th>Category</th>
+            <th>Function</th>
+            <th style="text-align:right">Annual Cost</th>
+            <th style="text-align:right">Licenses</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer>Atlas Defense Solutions · Confidential · Generated from Software Inventory workbook</footer>
+</div>
+
+<script>
+/* ----- DATA ----- */
+const inventory = [
+  {name:"Microsoft Entra ID P2", vendor:"Microsoft", cat:"SSO", fn:"Enterprise identity and conditional access", cost:0, lic:1200, notes:"Bundled with M365 GCC High E5"},
+  {name:"CyberArk Privilege Cloud", vendor:"CyberArk", cat:"PAM", fn:"Privileged access for IT and engineering admins", cost:95000, lic:200, notes:"Primary PAM"},
+  {name:"BeyondTrust Privileged Remote Access", vendor:"BeyondTrust", cat:"PAM", fn:"Vendor and remote support privileged access", cost:38000, lic:150, notes:"Acquired with merger 2024 — candidate for consolidation"},
+  {name:"Duo Security (DoD)", vendor:"Cisco", cat:"MFA", fn:"MFA for VPN and on-prem app access", cost:28000, lic:1200, notes:"Government tier; CAC bypass for field engineers"},
+  {name:"CAC/PIV Infrastructure (DoD ICAM)", vendor:"DoD", cat:"IAM", fn:"Smart card authentication backbone", cost:0, lic:1200, notes:"Required by contract; managed in-house"},
+  {name:"SailPoint IdentityIQ", vendor:"SailPoint", cat:"IAM", fn:"Identity governance and lifecycle", cost:110000, lic:1200, notes:"Joiner/mover/leaver automation"},
+  {name:"CrowdStrike Falcon Insight XDR", vendor:"CrowdStrike", cat:"EDR", fn:"Endpoint detection and response", cost:195000, lic:1500, notes:"Primary EDR for CUI environment"},
+  {name:"Microsoft Defender for Endpoint", vendor:"Microsoft", cat:"EDR", fn:"Endpoint detection and response", cost:0, lic:1200, notes:"Bundled with M365 GCC High E5 — candidate for consolidation"},
+  {name:"Tanium Core Platform", vendor:"Tanium", cat:"Endpoint Mgmt", fn:"Endpoint visibility, patching, asset inventory", cost:165000, lic:1500, notes:"Primary endpoint operations platform"},
+  {name:"Microsoft Intune", vendor:"Microsoft", cat:"Endpoint Mgmt", fn:"MDM for mobile and remote endpoints", cost:0, lic:1200, notes:"Bundled; used for mobile only — overlap with Tanium for workstations"},
+  {name:"Jamf Pro", vendor:"Jamf", cat:"Endpoint Mgmt", fn:"macOS management for engineering workstations", cost:22000, lic:240, notes:"Engineering team macOS fleet"},
+  {name:"Palo Alto PA-7080", vendor:"Palo Alto Networks", cat:"NGFW", fn:"Next-gen firewall — perimeter", cost:280000, lic:0, notes:"HA pair at HQ; CUI enclave boundary"},
+  {name:"Cisco Firepower 4145", vendor:"Cisco", cat:"NGFW", fn:"Site-to-site VPN concentrator for remote engineers", cost:95000, lic:0, notes:"Per-site appliances; legacy from pre-merger"},
+  {name:"Zscaler Internet Access — DoD", vendor:"Zscaler", cat:"SSE", fn:"Secure web gateway / SSE for remote users", cost:145000, lic:1200, notes:"Primary SSE; DoD authorization"},
+  {name:"Forescout eyeSight", vendor:"Forescout", cat:"NAC", fn:"Network access control and device visibility", cost:88000, lic:1500, notes:"Used for OT and lab network segmentation"},
+  {name:"Cisco Identity Services Engine (ISE)", vendor:"Cisco", cat:"NAC", fn:"Network access control for corporate LAN", cost:65000, lic:0, notes:"Overlap with Forescout — candidate for consolidation"},
+  {name:"ExtraHop Reveal(x) 360", vendor:"ExtraHop", cat:"NDR", fn:"Network detection and response, lateral movement analytics", cost:175000, lic:0, notes:"Tied to CUI enclave"},
+  {name:"Gigamon GigaVUE", vendor:"Gigamon", cat:"Network Monitoring", fn:"Network packet broker", cost:110000, lic:0, notes:"Feeds NDR and SIEM"},
+  {name:"Splunk Enterprise Security (Cloud)", vendor:"Splunk/Cisco", cat:"SIEM", fn:"Primary SIEM; SOC platform", cost:380000, lic:0, notes:"Cloud-hosted in Splunk Federal Cloud"},
+  {name:"Microsoft Sentinel", vendor:"Microsoft", cat:"SIEM", fn:"Cloud SIEM for M365 telemetry", cost:65000, lic:0, notes:"Bundled-ish via Defender; overlap with Splunk"},
+  {name:"Cortex XSOAR", vendor:"Palo Alto Networks", cat:"SOAR", fn:"Security orchestration and automated response", cost:88000, lic:0, notes:"Integrated with Splunk and CrowdStrike"},
+  {name:"Recorded Future", vendor:"Recorded Future", cat:"Threat Intel", fn:"Threat intelligence platform", cost:95000, lic:0, notes:"Used for industry threat actor tracking"},
+  {name:"Mandiant Advantage Threat Intelligence", vendor:"Google/Mandiant", cat:"Threat Intel", fn:"Threat intel; nation-state actor focus", cost:75000, lic:0, notes:"Overlap with Recorded Future — both retained for diversity"},
+  {name:"Tenable.sc (on-prem)", vendor:"Tenable", cat:"VM", fn:"Vulnerability management — CUI enclave", cost:55000, lic:0, notes:"On-prem for air-gapped scanning"},
+  {name:"Tenable.io", vendor:"Tenable", cat:"VM", fn:"Vulnerability management — cloud and remote", cost:38000, lic:0, notes:"Cloud workloads scanning"},
+  {name:"Wiz Cloud Security Platform", vendor:"Wiz", cat:"CSPM", fn:"Cloud security posture for AWS GovCloud", cost:145000, lic:0, notes:"Primary CSPM"},
+  {name:"AWS Security Hub", vendor:"AWS", cat:"CSPM", fn:"AWS-native security posture", cost:0, lic:0, notes:"Included with AWS GovCloud; overlap with Wiz"},
+  {name:"Microsoft Purview Information Protection", vendor:"Microsoft", cat:"DLP", fn:"Data classification and labeling for CUI", cost:0, lic:1200, notes:"Bundled with E5; CUI labeling enforced"},
+  {name:"Forcepoint DLP", vendor:"Forcepoint", cat:"DLP", fn:"Network and endpoint DLP", cost:95000, lic:1500, notes:"Pre-merger product — overlap with Purview"},
+  {name:"Virtru Secure Email and Files", vendor:"Virtru", cat:"DLP", fn:"Email and file encryption for external CUI sharing", cost:55000, lic:600, notes:"Used by contracts and legal teams"},
+  {name:"Veeam Backup & Replication", vendor:"Veeam", cat:"Backup", fn:"Backup for on-prem servers and VDI", cost:88000, lic:0, notes:"Primary backup"},
+  {name:"Cohesity DataProtect", vendor:"Cohesity", cat:"Backup", fn:"Backup for cloud workloads", cost:65000, lic:0, notes:"Cloud backup; overlap with Veeam"},
+  {name:"GitHub Enterprise Cloud", vendor:"GitHub", cat:"DevSecOps", fn:"Source control and DevSecOps platform", cost:78000, lic:600, notes:"Primary engineering platform; GHA pipelines"},
+  {name:"Snyk Enterprise", vendor:"Snyk", cat:"DevSecOps", fn:"SCA and code security scanning", cost:42000, lic:600, notes:"Integrated with GitHub Actions"},
+  {name:"Black Duck Software Composition Analysis", vendor:"Synopsys", cat:"DevSecOps", fn:"License compliance and SBOM generation", cost:55000, lic:0, notes:"Required for SBOM deliverables to DoD"},
+  {name:"Veracode Static Analysis", vendor:"Veracode", cat:"DevSecOps", fn:"SAST for legacy codebase", cost:68000, lic:0, notes:"Legacy product; overlap with Snyk for new code"},
+  {name:"HashiCorp Vault Enterprise", vendor:"HashiCorp", cat:"DevSecOps", fn:"Secrets management", cost:45000, lic:0, notes:"Used by DevOps for application secrets"},
+  {name:"Microsoft Defender for Office 365", vendor:"Microsoft", cat:"Email Security", fn:"Email threat protection (M365 GCC High)", cost:0, lic:1200, notes:"Bundled with E5"},
+  {name:"Proofpoint Email Protection", vendor:"Proofpoint", cat:"Email Security", fn:"Email gateway for external mail", cost:38000, lic:1200, notes:"Pre-merger; overlap with Defender"},
+  {name:"Microsoft Teams (GCC High)", vendor:"Microsoft", cat:"Productivity", fn:"Internal collaboration", cost:0, lic:1200, notes:"Bundled with E5"},
+  {name:"Cisco Webex for Government", vendor:"Cisco", cat:"Productivity", fn:"External-facing meetings with DoD customers", cost:18000, lic:200, notes:"Required by some prime contractors"},
+  {name:"ServiceNow ITSM (Gov)", vendor:"ServiceNow", cat:"ITSM", fn:"IT service management and CMDB", cost:110000, lic:1500, notes:"Primary ITSM and CMDB"},
+  {name:"Qualys Policy Compliance", vendor:"Qualys", cat:"VM", fn:"Configuration compliance (STIG) scanning", cost:32000, lic:0, notes:"DISA STIG compliance reporting"},
+  {name:"KnowBe4 (DoD tier)", vendor:"KnowBe4", cat:"Security Awareness", fn:"Phishing simulation and training", cost:18000, lic:1200, notes:"Required for CMMC"},
+  {name:"Microsoft Defender for Cloud Apps", vendor:"Microsoft", cat:"CASB", fn:"CASB for M365 and SaaS", cost:0, lic:1200, notes:"Bundled with E5"},
+];
+
+const fmt$ = (n) => n === 0 ? "—" : "$" + (n >= 1000 ? (n/1000).toFixed(0)+"K" : n);
+const fmtFull$ = (n) => "$" + n.toLocaleString();
+
+/* ---- Redundancy clusters ---- */
+const redundancies = [
+  {cat:"EDR (Endpoint Detection)", severity:"high", products:[
+    {name:"CrowdStrike Falcon XDR", cost:195000, role:"primary"},
+    {name:"Microsoft Defender for Endpoint", cost:0, role:"keep"}
+  ], reco:"Keep CrowdStrike as the SOC-facing EDR; demote Defender to second-signal telemetry into Splunk. No license savings (Defender is bundled), but reduces alert duplication and SOC analyst fatigue.", savings:0},
+
+  {cat:"PAM (Privileged Access)", severity:"high", products:[
+    {name:"CyberArk Privilege Cloud", cost:95000, role:"primary"},
+    {name:"BeyondTrust Privileged Remote Access", cost:38000, role:"cut"}
+  ], reco:"Migrate vendor remote-access use cases onto CyberArk Remote Access (already entitled). Retire BeyondTrust 90 days after merger-era contracts close out.", savings:38000},
+
+  {cat:"NGFW (Firewalls)", severity:"high", products:[
+    {name:"Palo Alto PA-7080", cost:280000, role:"primary"},
+    {name:"Cisco Firepower 4145", cost:95000, role:"cut"}
+  ], reco:"Replace per-site Firepower VPN concentrators with Prisma Access via existing Palo Alto contract or expand Zscaler ZPA. Eliminates pre-merger legacy stack.", savings:95000},
+
+  {cat:"NAC (Network Access Control)", severity:"high", products:[
+    {name:"Forescout eyeSight", cost:88000, role:"primary"},
+    {name:"Cisco ISE", cost:65000, role:"cut"}
+  ], reco:"Standardize on Forescout (already covers OT/lab — the hardest segment). Migrate corp LAN policies off Cisco ISE over two quarters.", savings:65000},
+
+  {cat:"SIEM", severity:"medium", products:[
+    {name:"Splunk ES (Cloud)", cost:380000, role:"primary"},
+    {name:"Microsoft Sentinel", cost:65000, role:"cut"}
+  ], reco:"Splunk remains primary SOC platform. Drop Sentinel; forward M365 telemetry to Splunk via Microsoft Graph API connector. Reduces dual-pane SOC operations.", savings:65000},
+
+  {cat:"DLP (Data Loss Prevention)", severity:"high", products:[
+    {name:"Microsoft Purview", cost:0, role:"primary"},
+    {name:"Forcepoint DLP", cost:95000, role:"cut"},
+    {name:"Virtru Secure Email", cost:55000, role:"keep"}
+  ], reco:"Purview (bundled with E5) covers endpoint + network + cloud DLP for CUI. Retire Forcepoint after Purview labels are enforced. Keep Virtru — niche but required for external CUI sharing with non-GCC partners.", savings:95000},
+
+  {cat:"Email Security", severity:"medium", products:[
+    {name:"Microsoft Defender for O365", cost:0, role:"primary"},
+    {name:"Proofpoint Email Protection", cost:38000, role:"cut"}
+  ], reco:"Defender for O365 has reached feature parity for GCC High inbound protection. Retire Proofpoint after a 60-day parallel-run validation.", savings:38000},
+
+  {cat:"Backup", severity:"medium", products:[
+    {name:"Veeam B&R", cost:88000, role:"primary"},
+    {name:"Cohesity DataProtect", cost:65000, role:"cut"}
+  ], reco:"Veeam now supports AWS GovCloud workload backup natively. Migrate Cohesity workloads to Veeam — single backup pane, single recovery runbook.", savings:65000},
+
+  {cat:"DevSecOps — SAST/SCA", severity:"medium", products:[
+    {name:"Snyk Enterprise", cost:42000, role:"primary"},
+    {name:"Black Duck SCA", cost:55000, role:"keep"},
+    {name:"Veracode SAST", cost:68000, role:"cut"}
+  ], reco:"Migrate remaining legacy codebases onto Snyk SAST + SCA. Keep Black Duck — it produces the SPDX/CycloneDX SBOMs required by DoD contracts (Snyk SBOM output not yet contract-approved).", savings:68000},
+
+  {cat:"Threat Intelligence", severity:"low", products:[
+    {name:"Recorded Future", cost:95000, role:"primary"},
+    {name:"Mandiant Advantage", cost:75000, role:"keep"}
+  ], reco:"Retain both — independent sourcing is a CTI best practice for nation-state-focused defense work. Re-evaluate at next renewal.", savings:0},
+
+  {cat:"CSPM (Cloud Security)", severity:"low", products:[
+    {name:"Wiz", cost:145000, role:"primary"},
+    {name:"AWS Security Hub", cost:0, role:"keep"}
+  ], reco:"Keep both — Security Hub is free with GovCloud and is the AWS-native signal; Wiz provides graph-based posture across multi-account. Ensure findings aren't double-ticketed in ServiceNow.", savings:0},
+
+  {cat:"Endpoint Management", severity:"medium", products:[
+    {name:"Tanium Core", cost:165000, role:"primary"},
+    {name:"Microsoft Intune", cost:0, role:"keep"},
+    {name:"Jamf Pro", cost:22000, role:"keep"}
+  ], reco:"Tanium owns workstation ops; Intune handles mobile MDM (bundled); Jamf is the only viable macOS option for engineering. Functional split is sound — but rationalize CMDB feeds to avoid duplicate inventory in ServiceNow.", savings:0},
+
+  {cat:"Vulnerability Management", severity:"low", products:[
+    {name:"Tenable.sc (air-gap)", cost:55000, role:"primary"},
+    {name:"Tenable.io (cloud)", cost:38000, role:"keep"},
+    {name:"Qualys Policy Compliance", cost:32000, role:"keep"}
+  ], reco:"Two Tenable products are licensed together — efficient. Qualys is the contract-required DISA STIG engine and cannot be eliminated. Optimize by consolidating reporting in Splunk.", savings:0},
+
+  {cat:"Productivity / Conferencing", severity:"low", products:[
+    {name:"Microsoft Teams", cost:0, role:"primary"},
+    {name:"Cisco Webex for Gov", cost:18000, role:"keep"}
+  ], reco:"Retain Webex — explicitly required by some prime contractors for external customer meetings. Consider tiering down license count to actual customer-facing users (~80 vs 200).", savings:0},
+
+  {cat:"Network Visibility", severity:"low", products:[
+    {name:"ExtraHop Reveal(x)", cost:175000, role:"primary"},
+    {name:"Gigamon GigaVUE", cost:110000, role:"keep"}
+  ], reco:"Complementary, not redundant — Gigamon is the tap/broker that feeds ExtraHop, the SIEM, and the NDR. No action.", savings:0},
+];
+
+const techDebt = [
+  {n:1, title:"Retire pre-merger duplicate stack", body:"BeyondTrust, Cisco Firepower, Cisco ISE, Forcepoint DLP, and Proofpoint all entered the portfolio via the 2024 merger and overlap with existing primary tools. Sequenced retirement over 4 quarters.", tag:"$331K / yr"},
+  {n:2, title:"Consolidate to bundled M365 GCC High capabilities", body:"E5 licensing already paid for Defender for Endpoint, Defender for O365, Purview DLP, Intune, Sentinel, and Defender for Cloud Apps. Use these as the default for new capabilities before buying point tools.", tag:"$133K / yr direct + license efficiency"},
+  {n:3, title:"Unify the SOC pane of glass on Splunk", body:"Sentinel adds a second SIEM, Defender adds a parallel alert stream, AWS Security Hub fires its own findings. Centralize correlation in Splunk ES, feed everything as data sources, and reduce analyst tool-switching debt.", tag:"Operational"},
+  {n:4, title:"Modernize the SAST/SCA toolchain", body:"Veracode is legacy and overlaps with Snyk for new code. Migrate remaining repos onto Snyk SAST and retire Veracode. Keep Black Duck strictly for SBOM contract deliverables.", tag:"$68K / yr"},
+  {n:5, title:"Single backup pane", body:"Cohesity entered for cloud, Veeam covered on-prem. Veeam now supports AWS GovCloud natively — consolidate to one backup platform, one runbook, one RTO/RPO posture.", tag:"$65K / yr"},
+  {n:6, title:"Right-size license counts", body:"Webex Government carries 200 seats but only ~80 employees regularly meet with external DoD customers. Audit license counts on Webex, Virtru, and Snyk against actual MAU each renewal.", tag:"Operational"},
+];
+
+/* ---- Render KPIs already in HTML ---- */
+
+/* ---- Charts ---- */
+const catSpend = {};
+inventory.forEach(i => { catSpend[i.cat] = (catSpend[i.cat]||0) + i.cost; });
+const spendEntries = Object.entries(catSpend).sort((a,b)=>b[1]-a[1]).slice(0,10);
+
+new Chart(document.getElementById('spendChart'), {
+  type:'bar',
+  data:{
+    labels: spendEntries.map(e=>e[0]),
+    datasets:[{
+      data: spendEntries.map(e=>e[1]),
+      backgroundColor: spendEntries.map((_,i) => `hsl(${230 - i*8}, 70%, ${62 - i*2}%)`),
+      borderRadius: 6,
+      borderSkipped: false,
+    }]
+  },
+  options:{
+    indexAxis:'y',
+    plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:(c)=>fmtFull$(c.raw) }}},
+    scales:{
+      x:{ grid:{color:'rgba(255,255,255,.05)'}, ticks:{color:'#98a2c4', callback:(v)=>'$'+v/1000+'K'}},
+      y:{ grid:{display:false}, ticks:{color:'#e6e9f5', font:{size:11}}}
+    },
+    maintainAspectRatio:false
+  }
+});
+
+const catCount = {};
+inventory.forEach(i => { catCount[i.cat] = (catCount[i.cat]||0) + 1; });
+const sprawl = Object.entries(catCount).filter(([,v])=>v>1).sort((a,b)=>b[1]-a[1]);
+const sprawlPalette = ['#ef4444','#f59e0b','#f97316','#eab308','#a855f7','#6366f1','#22d3ee','#10b981','#ec4899'];
+
+new Chart(document.getElementById('sprawlChart'), {
+  type:'doughnut',
+  data:{
+    labels: sprawl.map(e=>`${e[0]} (${e[1]})`),
+    datasets:[{
+      data: sprawl.map(e=>e[1]),
+      backgroundColor: sprawl.map((_,i)=>sprawlPalette[i%sprawlPalette.length]),
+      borderColor:'#11172d',
+      borderWidth:2
+    }]
+  },
+  options:{
+    plugins:{
+      legend:{ position:'right', labels:{ color:'#e6e9f5', font:{size:11}, boxWidth:10, padding:8 } },
+      tooltip:{ callbacks:{ label:(c)=>`${c.label}: ${c.raw} tools` }}
+    },
+    cutout:'62%',
+    maintainAspectRatio:false
+  }
+});
+
+/* ---- Redundancy cards ---- */
+const grid = document.getElementById('redundancyGrid');
+redundancies.forEach(r => {
+  const div = document.createElement('div');
+  div.className = `rcard ${r.severity}`;
+  div.innerHTML = `
+    <div class="rhead">
+      <div class="cat">${r.cat}</div>
+      <div class="sev">${r.severity === 'high' ? 'High overlap' : r.severity === 'medium' ? 'Medium overlap' : 'Low / Justified'}</div>
+    </div>
+    <div class="products">
+      ${r.products.map(p => `
+        <div class="product-tag ${p.role === 'primary' ? 'primary' : p.role === 'cut' ? 'cut' : ''}">
+          ${p.name} <span class="price">${fmt$(p.cost)}</span>
+        </div>`).join('')}
+    </div>
+    <div class="reco">${r.reco}</div>
+    ${r.savings > 0 ? `<div class="savings">↓ Save ${fmtFull$(r.savings)} / yr</div>` : `<div class="savings" style="background:rgba(99,102,241,.12);color:#c7d2fe;border-color:rgba(99,102,241,.3)">Operational improvement</div>`}
+  `;
+  grid.appendChild(div);
+});
+
+/* ---- Tech debt ---- */
+const debtList = document.getElementById('debtList');
+techDebt.forEach(d => {
+  const el = document.createElement('div');
+  el.className = 'debt';
+  el.innerHTML = `<div class="num">${d.n}</div><h3>${d.title}</h3><p>${d.body}</p><div class="tag">${d.tag}</div>`;
+  debtList.appendChild(el);
+});
+
+/* ---- Inventory table ---- */
+const flagged = new Set();
+const overlap = {};
+inventory.forEach(i => { overlap[i.cat] = (overlap[i.cat]||0)+1; });
+inventory.forEach((i, idx) => {
+  if (overlap[i.cat] > 1 || /candidate for consolidation|overlap|legacy/i.test(i.notes)) flagged.add(idx);
+});
+
+const tbody = document.querySelector('#inv tbody');
+const cats = [...new Set(inventory.map(i=>i.cat))].sort();
+const catSel = document.getElementById('catFilter');
+cats.forEach(c => { const o = document.createElement('option'); o.value=c; o.textContent=c; catSel.appendChild(o); });
+
+function render() {
+  const q = document.getElementById('search').value.toLowerCase();
+  const c = document.getElementById('catFilter').value;
+  const f = document.getElementById('flagFilter').value;
+  tbody.innerHTML = '';
+  inventory.forEach((i, idx) => {
+    if (c && i.cat !== c) return;
+    if (f === 'flag' && !flagged.has(idx)) return;
+    if (q && !`${i.name} ${i.vendor} ${i.fn} ${i.notes}`.toLowerCase().includes(q)) return;
+    const tr = document.createElement('tr');
+    if (flagged.has(idx)) tr.classList.add('flag');
+    tr.innerHTML = `
+      <td><b>${i.name}</b></td>
+      <td>${i.vendor}</td>
+      <td><span class="cat-chip">${i.cat}</span></td>
+      <td style="color:var(--muted)">${i.fn}</td>
+      <td style="text-align:right" class="cost ${i.cost===0?'free':''}">${i.cost===0?'Bundled':fmtFull$(i.cost)}</td>
+      <td style="text-align:right;color:var(--muted)">${i.lic || '—'}</td>
+      <td style="color:var(--muted);font-size:11.5px">${i.notes}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+document.getElementById('search').addEventListener('input', render);
+document.getElementById('catFilter').addEventListener('change', render);
+document.getElementById('flagFilter').addEventListener('change', render);
+render();
+</script>
+</body>
+</html>

@@ -96,6 +96,18 @@ export function AdminShell({
               ))}
             </nav>
             <div className="ml-auto flex items-center gap-3">
+              <Link
+                href="/admin/queue"
+                className="rounded-md px-3 py-2 text-sm font-medium text-ink-secondary hover:text-ink-primary"
+              >
+                Home
+              </Link>
+              <Link
+                href="/"
+                className="rounded-md px-3 py-2 text-sm font-medium text-ink-secondary hover:text-ink-primary"
+              >
+                View public site
+              </Link>
               {email ? (
                 <span className="text-xs text-ink-tertiary">{email}</span>
               ) : null}

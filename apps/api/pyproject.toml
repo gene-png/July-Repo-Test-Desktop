@@ -19,6 +19,10 @@ dependencies = [
     "httpx>=0.27",
     "structlog>=24.4",
     "boto3>=1.35",
+    # Anthropic Claude SDK for live AI runs (app/ai/llm.py AnthropicProvider).
+    # Imported lazily on first live call, so a missing declaration only
+    # surfaces as a 500 ("No module named 'anthropic'") when SHIELD_LLM_MODE=live.
+    "anthropic>=0.40",
     # Deliverable rendering (app/*/exporters.py): PDF via reportlab, XLSX via
     # openpyxl. Imported lazily inside the finalize endpoints, so a missing
     # declaration only surfaces as a 500 when a deliverable is rendered.

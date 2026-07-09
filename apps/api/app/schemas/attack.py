@@ -117,6 +117,9 @@ class AttackRunAiResponse(BaseModel):
     tools_available: int
     changed: list[CoverageChange]
     coverage: list[AttackCoverageResponse]
+    # Batches (of the 600+ techniques) the AI provider couldn't reach this run.
+    # >0 means partial coverage — re-run to fill the rest.
+    failed_batches: int = 0
 
 
 class AttackCoveragePatch(BaseModel):

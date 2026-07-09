@@ -42,6 +42,7 @@ from app.attack.exporters import render_xlsx as render_attack_xlsx
 from app.audit import audit
 from app.db.session import get_db
 from app.dependencies import current_client, current_user, require_role
+from app.logging import get_logger
 from app.models._common import utcnow
 from app.models.artifact import Artifact, ArtifactOrigin
 from app.models.attack_assessment import (
@@ -81,6 +82,7 @@ from app.tenant import (
 router = APIRouter(prefix="/attack", tags=["attack"])
 
 _admin_required = Depends(require_role(UserRole.ADMIN))
+_log = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -485,15 +487,40 @@ def run_ai(
 
     before = _snap()
     client_org = None if client.legal_name == "(pending intake)" else client.legal_name
-    result = run_job(
-        db,
-        llm,
-        "mitre_map",
-        inputs={"capability_list": tools, "technique_codes": sorted(rows)},
-        requested_by=user.id,
-        service_id=svc.id,
-        client_org_name=client_org,
-    )
+
+    # MITRE ATT&CK Enterprise is 600+ techniques. Asking the model to score every
+    # technique in one request produces a response far larger than a single
+    # completion can hold, and the long-running non-streaming call gets dropped
+    # by the API ("server disconnected without sending a response"). Batch the
+    # technique codes into small chunks so each call is fast and reliable; each
+    # chunk writes its own llm_calls row for audit.
+    # One large AI call scores every technique at once. The LLM client streams
+    # the response (app.ai.llm), so even the full 600+ technique map returns in
+    # a single request without hitting the non-streaming timeout or a dropped
+    # connection. run_job records the llm_calls row; on an upstream failure it
+    # re-raises, which we translate into a clean 502 rather than a 500 stack.
+    failed_batches = 0
+    try:
+        result = run_job(
+            db,
+            llm,
+            "mitre_map",
+            inputs={"capability_list": tools, "technique_codes": sorted(rows)},
+            requested_by=user.id,
+            service_id=svc.id,
+            client_org_name=client_org,
+        )
+    except Exception as exc:  # noqa: BLE001 - boundary: surface a clean error
+        _log.warning(
+            "attack_run_ai_failed",
+            service_id=str(svc.id),
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="The AI provider was unreachable. Please retry.",
+        ) from exc
+    suggestions = list((result.data or {}).get("techniques", []))
 
     def _validate_tools(names: object) -> list[str]:
         if not isinstance(names, list):
@@ -501,7 +528,7 @@ def run_ai(
         # Only tools that actually appear in the client's capability list.
         return [t for t in names if isinstance(t, str) and t.lower() in valid_tools]
 
-    for sugg in (result.data or {}).get("techniques", []):
+    for sugg in suggestions:
         if not isinstance(sugg, dict):
             continue
         row = rows.get(sugg.get("technique_code"))
@@ -537,7 +564,10 @@ def run_ai(
         target_type="attack_assessment",
         target_id=a.id,
         actor_user_id=user.id,
-        details={"tools_available": len(tools), "changed_rows": len(diffs)},
+        details={
+            "tools_available": len(tools),
+            "changed_rows": len(diffs),
+        },
     )
     db.commit()
 
@@ -545,7 +575,12 @@ def run_ai(
         AttackCoverageResponse.model_validate(r, from_attributes=True)
         for r in sorted(rows.values(), key=lambda r: r.technique_code)
     ]
-    return AttackRunAiResponse(tools_available=len(tools), changed=changes, coverage=coverage)
+    return AttackRunAiResponse(
+        tools_available=len(tools),
+        changed=changes,
+        coverage=coverage,
+        failed_batches=failed_batches,
+    )
 
 
 @router.post(

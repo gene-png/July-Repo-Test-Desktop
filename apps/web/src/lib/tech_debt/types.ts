@@ -119,8 +119,12 @@ export interface Deliverable {
   version: number;
   pdf_artifact_id: string | null;
   xlsx_artifact_id: string | null;
+  docx_artifact_id: string | null;
+  html_artifact_id: string | null;
   pdf_filename: string | null;
   xlsx_filename: string | null;
+  docx_filename: string | null;
+  html_filename: string | null;
   finalized_at: string | null;
   finalized_by: string | null;
   released_to_client_at: string | null;

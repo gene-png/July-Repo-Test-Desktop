@@ -44,6 +44,10 @@ class Deliverable(UUIDPKMixin, TimestampMixin, Base):
     docx_artifact_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("artifacts.id", ondelete="SET NULL")
     )
+    # Self-contained HTML dashboard - the primary, auto-built in-browser view.
+    html_artifact_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("artifacts.id", ondelete="SET NULL")
+    )
 
     finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finalized_by: Mapped[uuid.UUID | None] = mapped_column(

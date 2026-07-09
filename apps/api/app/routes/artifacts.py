@@ -221,3 +221,56 @@ def download_artifact(
         media_type=row.mime_type,
         headers={"Content-Disposition": f'attachment; filename="{row.title}"'},
     )
+
+
+@router.get(
+    "/{artifact_id}/view",
+    summary="Render an HTML artifact inline (e.g. the deliverable dashboard)",
+)
+def view_artifact(
+    artifact_id: uuid.UUID,
+    user: Annotated[User, Depends(current_user)],
+    client: Annotated[Client, Depends(current_client)],
+    db: Annotated[Session, Depends(get_db)],
+    storage: Annotated[StorageBackend, Depends(_storage_dep)],
+) -> Response:
+    """Serve an artifact for in-browser viewing (Content-Disposition: inline).
+
+    Restricted to text/html so this can't be used to render arbitrary
+    uploaded content inline (which would be an XSS/phishing vector); the
+    HTML deliverable dashboards are consultant-generated, not client
+    uploads. Same reader rules as /download: the uploader or any admin.
+    """
+    row = db.get(Artifact, artifact_id)
+    if row is None or row.client_id != client.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found.")
+    is_uploader = row.uploaded_by == user.id
+    is_staff = user.role == UserRole.ADMIN
+    if not (is_uploader or is_staff):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found.")
+    if row.mime_type != "text/html":
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Only HTML artifacts can be viewed inline. Use /download instead.",
+        )
+    try:
+        data = storage.get(row.file_storage_key)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Artifact bytes no longer available.",
+        ) from exc
+    # Lock down what the inline document can do: the dashboard is fully
+    # self-contained (no scripts, no external assets), so a strict CSP costs
+    # nothing and neutralizes any injection that slipped past HTML-escaping.
+    return Response(
+        content=data,
+        media_type="text/html; charset=utf-8",
+        headers={
+            "Content-Disposition": f'inline; filename="{row.title}"',
+            "Content-Security-Policy": (
+                "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'"
+            ),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )

@@ -1,6 +1,5 @@
 import {
   Card,
-  CardBody,
   CardDescription,
   CardHeader,
   CardTitle,
@@ -53,14 +52,6 @@ export function ServiceGrid(): JSX.Element {
               <CardTitle>{s.title}</CardTitle>
               <CardDescription>{s.description}</CardDescription>
             </CardHeader>
-            <CardBody>
-              <p className="text-xs uppercase tracking-wider text-ink-tertiary">
-                Includes:
-                <span className="ml-2 normal-case tracking-normal text-ink-secondary">
-                  reviewer audit walk, exec rollup, audit-logged AI extractions.
-                </span>
-              </p>
-            </CardBody>
           </Card>
         ))}
       </div>

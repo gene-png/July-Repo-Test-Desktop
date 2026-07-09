@@ -87,6 +87,7 @@ from app.zt.catalog import (
 )
 from app.zt.exporters import build_context as build_zt_context
 from app.zt.exporters import render_docx as render_zt_docx
+from app.zt.exporters import render_html_dashboard as render_zt_html
 from app.zt.exporters import render_pdf as render_zt_pdf
 from app.zt.exporters import render_xlsx as render_zt_xlsx
 from app.zt.maturity import ZtFrameworkCode, level_count, stage_definitions
@@ -970,6 +971,10 @@ def _serialize_deliverable(db: Session, deliv: Deliverable) -> DeliverableRespon
     if deliv.docx_artifact_id:
         a = db.get(Artifact, deliv.docx_artifact_id)
         docx_title = a.title if a else None
+    html_title = None
+    if deliv.html_artifact_id:
+        a = db.get(Artifact, deliv.html_artifact_id)
+        html_title = a.title if a else None
     return DeliverableResponse(
         id=deliv.id,
         service_id=deliv.service_id,
@@ -979,9 +984,11 @@ def _serialize_deliverable(db: Session, deliv: Deliverable) -> DeliverableRespon
         pdf_artifact_id=deliv.pdf_artifact_id,
         xlsx_artifact_id=deliv.xlsx_artifact_id,
         docx_artifact_id=deliv.docx_artifact_id,
+        html_artifact_id=deliv.html_artifact_id,
         pdf_filename=pdf_title,
         xlsx_filename=xlsx_title,
         docx_filename=docx_title,
+        html_filename=html_title,
         finalized_at=deliv.finalized_at,
         finalized_by=deliv.finalized_by,
         superseded_by=deliv.superseded_by,
@@ -1095,6 +1102,13 @@ def finalize_zt_deliverable(
         day=today,
         version=next_version,
     )
+    html_name = deliverable_filename(
+        company=client_name,
+        service_slug=service_slug,
+        extension="html",
+        day=today,
+        version=next_version,
+    )
 
     ctx = build_zt_context(
         client_legal_name=client_name,
@@ -1108,6 +1122,7 @@ def finalize_zt_deliverable(
     pdf_bytes = render_zt_pdf(ctx)
     xlsx_bytes = render_zt_xlsx(ctx)
     docx_bytes = render_zt_docx(ctx)
+    html_bytes = render_zt_html(ctx)
 
     pdf_artifact = _write_artifact(
         db,
@@ -1138,6 +1153,15 @@ def finalize_zt_deliverable(
         mime_type=DOCX_MIME,
         data=docx_bytes,
     )
+    html_artifact = _write_artifact(
+        db,
+        storage=storage,
+        user=user,
+        client_id=client.id,
+        filename=html_name,
+        mime_type="text/html",
+        data=html_bytes,
+    )
 
     summary_line = (
         f"Overall stage: {score.overall_stage_label}. "
@@ -1153,6 +1177,7 @@ def finalize_zt_deliverable(
         pdf_artifact_id=pdf_artifact.id,
         xlsx_artifact_id=xlsx_artifact.id,
         docx_artifact_id=docx_artifact.id,
+        html_artifact_id=html_artifact.id,
         finalized_at=utcnow(),
         finalized_by=user.id,
     )

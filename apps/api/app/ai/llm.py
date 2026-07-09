@@ -117,7 +117,16 @@ class AnthropicProvider:
         if self._client is None:
             from anthropic import Anthropic
 
-            self._client = Anthropic(api_key=self._api_key)
+            # We stream every completion (see complete()), so the timeout is the
+            # per-read gap between streamed events, not the whole-response budget
+            # — streamed events arrive continuously, so a long generation never
+            # trips it. 120s of headroom covers connection setup + first token; a
+            # couple of retries recover a transient connection blip.
+            self._client = Anthropic(
+                api_key=self._api_key,
+                max_retries=2,
+                timeout=120.0,
+            )
         return self._client
 
     def complete(self, prompt: str, payload: dict[str, Any]) -> LLMResponse:
@@ -126,9 +135,18 @@ class AnthropicProvider:
         # already run upstream, so this content is safe to egress.
         import json
 
-        msg = client.messages.create(
+        # STREAM the response. A large job (e.g. the full 600+ technique MITRE
+        # ATT&CK map) needs a big max_tokens, and a non-streaming request that
+        # size is refused/dropped: the SDK estimates it may exceed the ~10 minute
+        # non-streaming ceiling, and long-lived idle sockets get closed by the
+        # server ("APIConnectionError: server disconnected"). Streaming keeps the
+        # connection alive with continuous events and has no 10-minute cap, so a
+        # single large call completes reliably. 128000 is the model's max output
+        # and gives the full ATT&CK map (~65K tokens even when terse) headroom so
+        # it never truncates mid-JSON; smaller jobs stop at end_turn long before.
+        with client.messages.stream(
             model=self.model,
-            max_tokens=4096,
+            max_tokens=128000,
             messages=[
                 {
                     "role": "user",
@@ -138,7 +156,8 @@ class AnthropicProvider:
                     ],
                 }
             ],
-        )
+        ) as stream:
+            msg = stream.get_final_message()
         # `msg.content` is a list of blocks; gather the text blocks.
         text = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
         input_tokens = getattr(getattr(msg, "usage", None), "input_tokens", None)

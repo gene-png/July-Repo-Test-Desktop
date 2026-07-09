@@ -76,9 +76,11 @@ export function DeliverableCard({
       <CardHeader>
         <CardTitle>Deliverable</CardTitle>
         <CardDescription>
-          Render the PDF + XLSX from the approved capability list. Deliverables
-          are admin-only — download and share them outside the app. Re-finalize
-          on the same day appends <code>_v2</code> to the filename.
+          Finalize builds an interactive <b>HTML dashboard</b> (opens in a new
+          tab) plus downloadable <b>XLSX</b>, <b>DOCX</b>, and <b>PDF</b> from
+          the approved capability list. Deliverables are admin-only — share them
+          outside the app. Re-finalize on the same day appends <code>_v2</code>{" "}
+          to the filename.
         </CardDescription>
       </CardHeader>
       <CardBody className="flex flex-col gap-4">
@@ -100,28 +102,44 @@ export function DeliverableCard({
         </div>
 
         {deliverable ? (
-          <ul className="space-y-1 text-sm">
-            {deliverable.pdf_artifact_id ? (
-              <li>
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap gap-2">
+              {deliverable.html_artifact_id ? (
                 <a
-                  href={`/api/proxy/artifacts/${deliverable.pdf_artifact_id}/download`}
-                  className="text-brand-500 underline hover:text-brand-600"
+                  href={`/api/proxy/artifacts/${deliverable.html_artifact_id}/view`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 rounded-md bg-brand-500 px-4 py-2 text-sm font-semibold text-ink-on-accent hover:bg-brand-600"
                 >
-                  {deliverable.pdf_filename ?? "Download PDF"}
+                  <span aria-hidden>📊</span> Open HTML dashboard
                 </a>
-              </li>
-            ) : null}
-            {deliverable.xlsx_artifact_id ? (
-              <li>
+              ) : null}
+              {deliverable.docx_artifact_id ? (
+                <a
+                  href={`/api/proxy/artifacts/${deliverable.docx_artifact_id}/download`}
+                  className="inline-flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm font-semibold text-ink-primary hover:bg-surface-sunken"
+                >
+                  <span aria-hidden>📄</span> DOCX executive view
+                </a>
+              ) : null}
+              {deliverable.xlsx_artifact_id ? (
                 <a
                   href={`/api/proxy/artifacts/${deliverable.xlsx_artifact_id}/download`}
-                  className="text-brand-500 underline hover:text-brand-600"
+                  className="inline-flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm font-semibold text-ink-primary hover:bg-surface-sunken"
                 >
-                  {deliverable.xlsx_filename ?? "Download XLSX"}
+                  <span aria-hidden>📊</span> XLSX analysis
                 </a>
-              </li>
+              ) : null}
+            </div>
+            {deliverable.pdf_artifact_id ? (
+              <a
+                href={`/api/proxy/artifacts/${deliverable.pdf_artifact_id}/download`}
+                className="w-fit text-xs text-ink-tertiary underline hover:text-brand-600"
+              >
+                Also download PDF ({deliverable.pdf_filename ?? "report.pdf"})
+              </a>
             ) : null}
-          </ul>
+          </div>
         ) : null}
 
         <div className="flex flex-wrap items-center gap-2">

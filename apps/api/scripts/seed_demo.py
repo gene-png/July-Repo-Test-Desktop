@@ -259,7 +259,6 @@ def _release(
         xlsx_artifact_id=xlsx_art.id,
         finalized_at=utcnow(),
         finalized_by=user.id,
-        released_to_client_at=utcnow(),
     )
     db.add(deliv)
     db.flush()

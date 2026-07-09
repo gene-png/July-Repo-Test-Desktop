@@ -366,6 +366,19 @@ export function AttackWorkspace({
                     : `${runResult.tools_available} tool${runResult.tools_available === 1 ? "" : "s"} available for mapping.`}
                 </p>
               ) : null}
+              {runResult && (runResult.failed_batches ?? 0) > 0 ? (
+                <p
+                  className="text-sm text-status-warning-fg"
+                  role="alert"
+                  aria-live="polite"
+                >
+                  {runResult.failed_batches} batch
+                  {runResult.failed_batches === 1 ? "" : "es"} of techniques
+                  couldn&apos;t be reached this run (transient provider issue).
+                  The rest were scored — click <b>Run AI</b> again to fill in
+                  the remaining techniques.
+                </p>
+              ) : null}
             </CardBody>
           </Card>
           <StaleDocsNudge stale={assessment.documents_stale} />

@@ -35,6 +35,7 @@ import type {
 import { AiStatusBanner } from "./AiStatusBanner";
 import { ConsolidationPlanCard } from "./ConsolidationPlanCard";
 import { DeliverableCard } from "./DeliverableCard";
+import { DispositionLegend } from "./DispositionLegend";
 import { EditableCapabilityTable } from "./EditableCapabilityTable";
 import { IntakeDocumentsPanel } from "./IntakeDocumentsPanel";
 import { OverlapDashboard } from "./OverlapDashboard";
@@ -281,6 +282,8 @@ export function TechDebtWorkspace({
           />
         </div>
       ) : null}
+
+      {list ? <DispositionLegend /> : null}
 
       {list ? (
         <section aria-labelledby="cap-list" className="flex flex-col gap-3">

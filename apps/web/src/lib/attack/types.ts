@@ -81,6 +81,8 @@ export interface AttackRunAiResponse {
   tools_available: number;
   changed: CoverageChange[];
   coverage: AttackCoverageRow[];
+  /** Batches the AI provider couldn't reach; >0 means re-run to fill the rest. */
+  failed_batches?: number;
 }
 
 export interface TacticHeatmapEntry {

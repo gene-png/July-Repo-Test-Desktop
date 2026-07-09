@@ -78,14 +78,22 @@ _MITRE_MAP_PROMPT = """You are assisting a Kentro analyst mapping a security too
 inventory to the MITRE ATT&CK Enterprise matrix. From the capability list and any
 context, SUGGEST a draft only.
 
-For each technique you can speak to, suggest a coverage status (covered, partial,
-gap, not_applicable) and which listed tools provide detection, prevention, and
-response, plus a short rationale. You may ONLY name tools that appear in the
-supplied capability list. Do NOT compute coverage percentages — code does that.
+For every technique, suggest a coverage status: covered, partial, gap, or
+not_applicable. You may ONLY name tools that appear in the supplied capability
+list. Do NOT compute coverage percentages — code does that.
+
+Keep the output COMPACT so all techniques fit in a single response:
+- For "covered" or "partial": include the relevant detection_tools /
+  prevention_tools / response_tools and a ONE-SENTENCE rationale.
+- For "gap" or "not_applicable": return ONLY technique_code and status — omit the
+  tool arrays and the rationale entirely (there is nothing to cite).
+
 Return strictly JSON:
-{"techniques": [{"technique_code": "T1003", "status": "covered|partial|gap|not_applicable",
-"detection_tools": [...], "prevention_tools": [...], "response_tools": [...],
-"rationale": "..."}], "executive_summary": "...", "top_blind_spots": [...]}
+{"techniques": [
+{"technique_code": "T1003", "status": "covered", "detection_tools": [...],
+"prevention_tools": [...], "response_tools": [...], "rationale": "..."},
+{"technique_code": "T1005", "status": "gap"}
+], "executive_summary": "...", "top_blind_spots": [...]}
 """
 
 register_job(AIJob(name="mitre_map", prompt=_MITRE_MAP_PROMPT, parser=parse_json))
