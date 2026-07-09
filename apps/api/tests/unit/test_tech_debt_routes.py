@@ -229,6 +229,174 @@ def test_extract_runs_redacted_call_and_writes_capability_list(app_client) -> No
         assert cap_list.version == 1
 
 
+def _xlsx_bytes(header: list[str] | None, rows: list[list]) -> bytes:
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    if header is not None:
+        ws.append(header)
+        for r in rows:
+            ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _upload(c: TestClient, bearer: str, name: str, data: bytes, mime: str) -> str:
+    r = c.post(
+        "/artifacts",
+        headers={"Authorization": f"Bearer {bearer}"},
+        files={"file": (name, io.BytesIO(data), mime)},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@pytest.mark.unit
+def test_extract_422_when_csv_has_no_data_rows(app_client) -> None:
+    """C-1: a header-only CSV yields zero data rows -> typed 422, no llm call."""
+    c, TestSession, provider = app_client
+    admin = register_admin(c, "admin@example.com")
+    bearer = admin["tokens"]["access_token"]
+    provider.register("extract.capabilities", lambda _p: LLMResponse('{"items": []}'))
+
+    sr = c.post(
+        "/tech-debt/services",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"title": "x"},
+    )
+    svc_id = sr.json()["id"]
+    artifact_id = _upload_csv(c, bearer, "empty.csv", b"Tool,Vendor,Cost\n")
+    r = c.post(
+        f"/tech-debt/services/{svc_id}/capability-lists/extract",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"artifact_id": artifact_id},
+    )
+    assert r.status_code == 422, r.text
+    assert "No data rows found" in r.json()["error"]["message"]
+    # Bailed before run_job: no llm_calls row written.
+    with TestSession() as db:
+        assert db.execute(select(LLMCall)).first() is None
+
+
+@pytest.mark.unit
+def test_extract_422_when_xlsx_sheet_empty(app_client) -> None:
+    """C-1: an XLSX whose active sheet has no rows -> typed 422."""
+    c, _, provider = app_client
+    admin = register_admin(c, "admin@example.com")
+    bearer = admin["tokens"]["access_token"]
+    provider.register("extract.capabilities", lambda _p: LLMResponse('{"items": []}'))
+
+    sr = c.post(
+        "/tech-debt/services",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"title": "x"},
+    )
+    svc_id = sr.json()["id"]
+    artifact_id = _upload(c, bearer, "empty.xlsx", _xlsx_bytes(None, []), _XLSX_MIME)
+    r = c.post(
+        f"/tech-debt/services/{svc_id}/capability-lists/extract",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"artifact_id": artifact_id},
+    )
+    assert r.status_code == 422, r.text
+    assert "No data rows found" in r.json()["error"]["message"]
+
+
+@pytest.mark.unit
+def test_extract_422_when_xlsx_is_corrupt(app_client) -> None:
+    """C-2: bytes that aren't a real zip/xlsx -> typed 422, not a 500."""
+    c, _, provider = app_client
+    admin = register_admin(c, "admin@example.com")
+    bearer = admin["tokens"]["access_token"]
+    provider.register("extract.capabilities", lambda _p: LLMResponse('{"items": []}'))
+
+    sr = c.post(
+        "/tech-debt/services",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"title": "x"},
+    )
+    svc_id = sr.json()["id"]
+    artifact_id = _upload(c, bearer, "corrupt.xlsx", b"not a real xlsx at all", _XLSX_MIME)
+    r = c.post(
+        f"/tech-debt/services/{svc_id}/capability-lists/extract",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"artifact_id": artifact_id},
+    )
+    assert r.status_code == 422, r.text
+
+
+@pytest.mark.unit
+def test_extract_truncates_at_max_rows_and_flags_it(app_client) -> None:
+    """C-1: a 501-row inventory -> model sees 500 rows (no sentinel), the
+    response carries truncated=true, and the sentinel never reaches the model."""
+    c, _, provider = app_client
+    admin = register_admin(c, "admin@example.com")
+    bearer = admin["tokens"]["access_token"]
+
+    captured: dict = {}
+
+    def fake(payload: dict) -> LLMResponse:
+        captured["payload"] = payload
+        rows = payload["rows"]
+        items = [{"name": f"Tool {i}", "source_row_index": i} for i in range(len(rows))]
+        return LLMResponse(content=json.dumps({"items": items}))
+
+    provider.register("extract.capabilities", fake)
+
+    sr = c.post(
+        "/tech-debt/services",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"title": "x"},
+    )
+    svc_id = sr.json()["id"]
+    csv = b"Tool\n" + b"".join(b"Row %d\n" % i for i in range(501))
+    artifact_id = _upload_csv(c, bearer, "big.csv", csv)
+
+    r = c.post(
+        f"/tech-debt/services/{svc_id}/capability-lists/extract",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"artifact_id": artifact_id},
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["truncated"] is True
+    # Model received exactly MAX_ROWS rows, with no phantom sentinel row.
+    sent = captured["payload"]["rows"]
+    assert len(sent) == 500
+    assert all("__truncated__" not in row for row in sent)
+    assert len(body["items"]) == 500
+
+
+@pytest.mark.unit
+def test_extract_not_truncated_flag_false_for_small_file(app_client) -> None:
+    c, _, provider = app_client
+    admin = register_admin(c, "admin@example.com")
+    bearer = admin["tokens"]["access_token"]
+    provider.register(
+        "extract.capabilities",
+        lambda _p: LLMResponse('{"items": [{"name": "Wiz"}]}'),
+    )
+    sr = c.post(
+        "/tech-debt/services",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"title": "x"},
+    )
+    svc_id = sr.json()["id"]
+    artifact_id = _upload_csv(c, bearer, "small.csv", b"Tool\nWiz\n")
+    r = c.post(
+        f"/tech-debt/services/{svc_id}/capability-lists/extract",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"artifact_id": artifact_id},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["truncated"] is False
+
+
 @pytest.mark.unit
 def test_extract_rejects_unknown_service(app_client) -> None:
     c, _, _ = app_client

@@ -30,6 +30,14 @@ stop() {
     [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null || true
     rm -f "$f"
   done
+  # Reap orphans from earlier boots too: a stale server keeps the port bound,
+  # the new one silently fails to bind, and old code keeps serving.
+  pkill -f "uvicorn app.main:app" 2>/dev/null || true
+  pkill -f "next-server" 2>/dev/null || true
+  for i in $(seq 1 10); do
+    ss -ltn 2>/dev/null | grep -qE ":(8000|3000) " || break
+    sleep 1
+  done
   echo "stack stopped"
 }
 

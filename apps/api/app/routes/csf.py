@@ -44,6 +44,7 @@ from app.csf.exporters import build_context as build_csf_context
 from app.csf.exporters import render_docx as render_csf_docx
 from app.csf.exporters import render_pdf as render_csf_pdf
 from app.csf.exporters import render_xlsx as render_csf_xlsx
+from app.csf.gap import DEFAULT_TARGET_TIER
 from app.csf.gap import analyze as analyze_gaps
 from app.csf.maturity import TIER_DEFINITIONS
 from app.csf.playbook import (
@@ -928,6 +929,9 @@ def patch_dimension_score(
             setattr(row, f, data[f])
         elif f in data and f in ("rationale", "what_we_found", "target_level"):
             setattr(row, f, None)  # explicit clear allowed for nullable text/target
+    # A human PATCH counts as scoring the row (B-3): stamp scored_at so the
+    # playbook export gate treats this row as scored.
+    row.scored_at = utcnow()
     db.commit()
     return _score_response(row)
 
@@ -1066,13 +1070,36 @@ def run_ai(
 
     before = _snap()
     client_org = None if client.legal_name == "(pending intake)" else client.legal_name
+    # Ground the suggestion in the seeded tier list plus, per (tier, subcategory)
+    # row, the client's questionnaire answer (maturity tier + notes) and evidence
+    # flag. The redaction path (run_job -> LLMClient.invoke) scrubs the notes.
+    answers = {
+        ans.subcategory_code: ans
+        for ans in db.execute(select(CsfAnswer).where(CsfAnswer.assessment_id == a.id))
+        .scalars()
+        .all()
+    }
+    subcategory_payload = []
+    for r in sorted(rows.values(), key=lambda r: (r.tier, r.subcategory_code)):
+        ans = answers.get(r.subcategory_code)
+        subcategory_payload.append(
+            {
+                "tier": r.tier,
+                "subcategory_code": r.subcategory_code,
+                "in_scope": r.in_scope,
+                "has_evidence": r.has_evidence,
+                "rationale": r.rationale,
+                "questionnaire_tier": ans.maturity_tier if ans is not None else None,
+                "questionnaire_notes": ans.notes if ans is not None else None,
+            }
+        )
     result = run_job(
         db,
         llm,
         "csf_score",
         inputs={
             "tiers": sorted({r.tier for r in rows.values()}),
-            "subcategories": sorted({r.subcategory_code for r in rows.values()}),
+            "subcategories": subcategory_payload,
         },
         requested_by=user.id,
         service_id=svc.id,
@@ -1096,6 +1123,7 @@ def run_ai(
                     setattr(row, dim, v)
         if isinstance(sugg.get("what_we_found"), str):
             row.what_we_found = sugg["what_we_found"]
+        row.scored_at = utcnow()  # B-3: AI apply counts as scoring this row
 
     db.flush()
     after = _snap()
@@ -1155,6 +1183,25 @@ def export_playbook(
             status_code=status.HTTP_409_CONFLICT,
             detail="Seed the Working Profile before exporting.",
         )
+    # B-3 export gate: every in-scope row must be scored (scored_at set) and the
+    # assessment must be approved before we render the playbook. Unscored rows
+    # export as "Unscored" placeholders, so exporting them silently would ship a
+    # misleading maturity picture.
+    in_scope_rows = [r for r in all_rows if r.in_scope]
+    unscored = [r for r in in_scope_rows if r.scored_at is None]
+    if unscored:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"{len(unscored)} of {len(in_scope_rows)} in-scope rows are unscored; "
+                "score every in-scope row before exporting the playbook."
+            ),
+        )
+    if a.status not in (CsfAssessmentStatus.APPROVED, CsfAssessmentStatus.RELEASED):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Assessment is not approved; approve it before exporting the playbook.",
+        )
     enterprise_rows, _ = _enterprise_subcategories(db, a)
     tier_profiles: dict[str, list] = {}
     for tier in ("high", "moderate", "low"):
@@ -1185,6 +1232,9 @@ def export_playbook(
                 version=a.version,
                 enterprise_rows=enterprise_rows,
                 tier_profiles=tier_profiles,
+                unscored_keys=frozenset(
+                    (r.tier, r.subcategory_code) for r in all_rows if r.scored_at is None
+                ),
             ),
         ),
         (
@@ -1371,7 +1421,11 @@ def finalize_csf_deliverable(
         r.subcategory_code: r.notes for r in answers if r.subcategory_code in valid
     }
     score = compute_score(tier_map)
-    gap = analyze_gaps(tier_map, notes=notes_map)
+    # Engagement-level target: the client's intake goal via the source request,
+    # falling back to the engine default (T3) only when the intake goal is
+    # absent (B-2). The summary line and exporters print the resolved tier.
+    target_tier = _client_target_tier(db, svc.id) or DEFAULT_TARGET_TIER
+    gap = analyze_gaps(tier_map, notes=notes_map, target_tier=target_tier)
 
     client_name = client.legal_name
     if client_name == "(pending intake)":

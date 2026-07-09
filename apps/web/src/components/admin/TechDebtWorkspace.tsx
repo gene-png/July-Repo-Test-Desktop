@@ -233,7 +233,7 @@ export function TechDebtWorkspace({
               setDocsReloadKey((k) => k + 1);
               void runExtraction(a.id);
             }}
-            accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+            accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           />
           {extracting ? (
             <p className="text-sm text-ink-tertiary" aria-live="polite">

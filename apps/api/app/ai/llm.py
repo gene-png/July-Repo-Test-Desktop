@@ -34,6 +34,34 @@ from app.models.llm_call import LLMCall, LLMCallMode, LLMCallStatus
 
 _log = get_logger(__name__)
 
+# Default output-token ceiling for jobs that don't override it (Task S1-A A-3).
+# Large jobs (the full ATT&CK map, the full CSF playbook) pass max_tokens=128000
+# explicitly; everything else stops at end_turn well under this bound.
+DEFAULT_MAX_TOKENS = 16000
+
+
+class LLMConfigurationError(RuntimeError):
+    """Live LLM mode is selected but the provider cannot be built.
+
+    Carries a machine-readable ``reason`` alongside the human ``message`` so the
+    route layer can surface the existing {reason, message} typed-error pattern
+    (mapped to 503 at the ai-status endpoint) instead of a bare RuntimeError.
+    Raised eagerly when the provider is built (at boot / first use) so a
+    misconfigured live deployment fails loudly rather than on the first AI call.
+    """
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.message = message
+
+
+def anthropic_sdk_available() -> bool:
+    """True when the `anthropic` SDK can be imported (no import side effects)."""
+    import importlib.util
+
+    return importlib.util.find_spec("anthropic") is not None
+
 
 class LLMResponse:
     """Provider response container. Token counts may be None if the provider
@@ -56,9 +84,19 @@ class LLMProvider(Protocol):
     name: str
     model: str
 
-    def complete(self, prompt: str, payload: dict[str, Any]) -> LLMResponse:
+    def complete(
+        self,
+        prompt: str,
+        payload: dict[str, Any],
+        *,
+        model: str | None = None,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
         """Run the prompt + payload through the provider. Synchronous; the
-        caller is on a Celery worker for anything that's not interactive."""
+        caller is on a Celery worker for anything that's not interactive.
+
+        `model`/`max_tokens` are optional per-job overrides; None inherits the
+        provider's configured model and the DEFAULT_MAX_TOKENS ceiling."""
         ...
 
 
@@ -83,7 +121,14 @@ class FixtureProvider:
     def register_static(self, purpose: str, response: LLMResponse) -> None:
         self.register(purpose, lambda _payload: response)
 
-    def complete(self, prompt: str, payload: dict[str, Any]) -> LLMResponse:
+    def complete(
+        self,
+        prompt: str,
+        payload: dict[str, Any],
+        *,
+        model: str | None = None,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
         purpose = payload.get("__purpose__") or "default"
         if purpose not in self._fixtures and "default" not in self._fixtures:
             raise KeyError(
@@ -105,9 +150,10 @@ class AnthropicProvider:
 
     def __init__(self, *, model: str, api_key: str) -> None:
         if not api_key:
-            raise RuntimeError(
+            raise LLMConfigurationError(
+                "missing_api_key",
                 "ANTHROPIC_API_KEY is not set. Either set it in .env or switch "
-                "SHIELD_LLM_MODE to 'fixture'."
+                "SHIELD_LLM_MODE to 'fixture'.",
             )
         self.model = model
         self._api_key = api_key
@@ -129,7 +175,14 @@ class AnthropicProvider:
             )
         return self._client
 
-    def complete(self, prompt: str, payload: dict[str, Any]) -> LLMResponse:
+    def complete(
+        self,
+        prompt: str,
+        payload: dict[str, Any],
+        *,
+        model: str | None = None,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
         client = self._ensure_client()
         # Payload is sent as JSON inside the user message. The redactor has
         # already run upstream, so this content is safe to egress.
@@ -141,12 +194,13 @@ class AnthropicProvider:
         # non-streaming ceiling, and long-lived idle sockets get closed by the
         # server ("APIConnectionError: server disconnected"). Streaming keeps the
         # connection alive with continuous events and has no 10-minute cap, so a
-        # single large call completes reliably. 128000 is the model's max output
-        # and gives the full ATT&CK map (~65K tokens even when terse) headroom so
-        # it never truncates mid-JSON; smaller jobs stop at end_turn long before.
+        # single large call completes reliably. Large jobs pass max_tokens=128000
+        # (the model's max output) so the full ATT&CK map (~65K tokens even when
+        # terse) never truncates mid-JSON; smaller jobs inherit DEFAULT_MAX_TOKENS
+        # and stop at end_turn long before. `model` likewise overrides per job.
         with client.messages.stream(
-            model=self.model,
-            max_tokens=128000,
+            model=model or self.model,
+            max_tokens=max_tokens or DEFAULT_MAX_TOKENS,
             messages=[
                 {
                     "role": "user",
@@ -169,13 +223,30 @@ def _build_provider(settings: Settings) -> LLMProvider:
     if settings.shield_llm_mode == "fixture":
         return FixtureProvider(model=settings.shield_llm_model)
     if settings.shield_llm_provider == "anthropic":
+        # Live mode: fail loudly and early (Task S1-A A-1). Eagerly import the
+        # SDK and verify the key here so a misconfigured live deployment raises
+        # the typed configuration error at boot / first use rather than on the
+        # first AI call deep inside a Celery task.
+        if not anthropic_sdk_available():
+            raise LLMConfigurationError(
+                "sdk_unavailable",
+                "Live LLM mode requires the 'anthropic' SDK, which is not "
+                "importable. Install it or set SHIELD_LLM_MODE=fixture.",
+            )
+        if not settings.anthropic_api_key:
+            raise LLMConfigurationError(
+                "missing_api_key",
+                "Live LLM mode is on but ANTHROPIC_API_KEY is not set. Set it in "
+                ".env or switch SHIELD_LLM_MODE to 'fixture'.",
+            )
         return AnthropicProvider(
             model=settings.shield_llm_model,
             api_key=settings.anthropic_api_key,
         )
-    raise RuntimeError(
+    raise LLMConfigurationError(
+        "provider_unsupported",
         f"LLM provider {settings.shield_llm_provider!r} is not implemented in v1. "
-        "Set SHIELD_LLM_PROVIDER=anthropic or SHIELD_LLM_MODE=fixture."
+        "Set SHIELD_LLM_PROVIDER=anthropic or SHIELD_LLM_MODE=fixture.",
     )
 
 
@@ -205,8 +276,14 @@ class LLMClient:
         redaction_mode: RedactionMode | None = None,
         client_org_name: str | None = None,
         name_hints: tuple[str, ...] = (),
+        model: str | None = None,
+        max_tokens: int | None = None,
     ) -> tuple[LLMResponse, LLMCall]:
-        """Redact, write the llm_calls row, call the provider, finalize the row."""
+        """Redact, write the llm_calls row, call the provider, finalize the row.
+
+        `model`/`max_tokens` are optional per-job overrides threaded from the
+        AIJob; None inherits the provider's configured model / DEFAULT_MAX_TOKENS.
+        """
         mode = redaction_mode or self._settings.shield_redaction_mode  # type: ignore[assignment]
         cleaned_payload, removed_counts = redact_payload(
             payload,
@@ -224,7 +301,7 @@ class LLMClient:
             purpose=purpose,
             prompt_version=prompt_version,
             provider=self.provider.name,
-            model=self.provider.model,
+            model=model or self.provider.model,
             mode=call_mode,
             status=LLMCallStatus.RUNNING,
             requested_by=requested_by,
@@ -240,7 +317,9 @@ class LLMClient:
 
         started = time.monotonic()
         try:
-            response = self.provider.complete(prompt, send_payload)
+            response = self.provider.complete(
+                prompt, send_payload, model=model, max_tokens=max_tokens
+            )
         except Exception as exc:  # noqa: BLE001 - boundary; log + record + re-raise
             row.status = LLMCallStatus.FAILED
             row.error_message = f"{type(exc).__name__}: {exc}"
@@ -267,7 +346,7 @@ class LLMClient:
             "llm_call_completed",
             purpose=purpose,
             provider=self.provider.name,
-            model=self.provider.model,
+            model=model or self.provider.model,
             mode=call_mode.value,
             duration_ms=row.duration_ms,
             redacted=removed_counts,

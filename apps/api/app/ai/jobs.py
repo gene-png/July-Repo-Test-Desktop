@@ -11,6 +11,7 @@ The prompt bodies here are the engine-level skeletons. The service phases
 
 from __future__ import annotations
 
+from app.ai.contracts import describe_shape
 from app.ai.engine import AIJob, parse_json, register_job
 
 # --- Tech Debt extraction (moved behind the registry) ----------------------
@@ -38,43 +39,52 @@ register_job(
 
 
 # --- CSF dimension-score suggestions ---------------------------------------
-_CSF_SCORE_PROMPT = """You are assisting a Kentro analyst scoring a NIST CSF 2.0
-assessment. From the supplied interview answers, evidence summaries, and per-
-subcategory context, SUGGEST a draft only.
+_CSF_SCORE_PROMPT = f"""You are assisting a Kentro analyst scoring a NIST CSF 2.0
+assessment. From the supplied seeded tier list, per-subcategory questionnaire
+answers (maturity tier + notes), and evidence flags, SUGGEST a draft only.
 
-For each in-scope subcategory return the five dimension scores — Governance,
+The payload's `subcategories` array lists every in-scope (tier, subcategory_code)
+row you must score. For EACH one return the five dimension scores — Governance,
 Policy and Process, Implementation, Monitoring and Measurement, Continuous
 Improvement — each an integer 0, 1, or 2, plus a short "what we found" narrative.
+Echo back the SAME `tier` and `subcategory_code` you were given so the score
+lands on the right row (the same subcategory can appear under more than one tier).
 
 Do NOT compute totals, maturity levels, roll-ups, gaps, or priorities — those are
-calculated by code. Return strictly JSON of the form:
-{"subcategories": [{"code": "GV.OC-01", "governance": 0-2, "policy": 0-2,
-"implementation": 0-2, "monitoring": 0-2, "improvement": 0-2,
-"what_we_found": "..."}], "executive_summary": "..."}
+calculated by code. Return strictly JSON of this shape:
+{describe_shape("csf_score")}
 """
 
-register_job(AIJob(name="csf_score", prompt=_CSF_SCORE_PROMPT, parser=parse_json))
+# csf_score can span the full Playbook (hundreds of tier x subcategory rows), so
+# it runs on the fast/cheap model with the large output ceiling (Task S1-A A-3).
+register_job(
+    AIJob(
+        name="csf_score",
+        prompt=_CSF_SCORE_PROMPT,
+        parser=parse_json,
+        model="claude-haiku-4-5",
+        max_tokens=128000,
+    )
+)
 
 
 # --- Zero Trust current/target suggestions ---------------------------------
-_ZT_SCORE_PROMPT = """You are assisting a Kentro analyst scoring a Zero Trust
+_ZT_SCORE_PROMPT = f"""You are assisting a Kentro analyst scoring a Zero Trust
 assessment for the stated framework (CISA ZTMM 2.0 or DoD ZTRA). From the
 questionnaire answers and evidence, SUGGEST a draft only.
 
 For each capability return a suggested current maturity level and a suggested
 target level, on the framework's own scale (CISA 1-4, DoD 1-3), plus a per-pillar
 "what we found" narrative. Do NOT compute pillar roll-ups, overall posture, gaps,
-or the roadmap — code does that. Return strictly JSON:
-{"capabilities": [{"code": "...", "current": int, "target": int}],
-"pillar_narratives": {"<pillar_code>": "..."}, "executive_summary": "...",
-"roadmap_summary": "..."}
+or the roadmap — code does that. Return strictly JSON of this shape:
+{describe_shape("zt_score")}
 """
 
 register_job(AIJob(name="zt_score", prompt=_ZT_SCORE_PROMPT, parser=parse_json))
 
 
 # --- MITRE ATT&CK coverage suggestions -------------------------------------
-_MITRE_MAP_PROMPT = """You are assisting a Kentro analyst mapping a security tool
+_MITRE_MAP_PROMPT = f"""You are assisting a Kentro analyst mapping a security tool
 inventory to the MITRE ATT&CK Enterprise matrix. From the capability list and any
 context, SUGGEST a draft only.
 
@@ -88,35 +98,44 @@ Keep the output COMPACT so all techniques fit in a single response:
 - For "gap" or "not_applicable": return ONLY technique_code and status — omit the
   tool arrays and the rationale entirely (there is nothing to cite).
 
-Return strictly JSON:
-{"techniques": [
-{"technique_code": "T1003", "status": "covered", "detection_tools": [...],
-"prevention_tools": [...], "response_tools": [...], "rationale": "..."},
-{"technique_code": "T1005", "status": "gap"}
-], "executive_summary": "...", "top_blind_spots": [...]}
+Return strictly JSON of this shape:
+{describe_shape("mitre_map")}
 """
 
-register_job(AIJob(name="mitre_map", prompt=_MITRE_MAP_PROMPT, parser=parse_json))
+# mitre_map emits the full 600+ technique Enterprise matrix, so it runs on the
+# fast/cheap model with the large output ceiling (Task S1-A A-3).
+register_job(
+    AIJob(
+        name="mitre_map",
+        prompt=_MITRE_MAP_PROMPT,
+        parser=parse_json,
+        model="claude-haiku-4-5",
+        max_tokens=128000,
+    )
+)
 
 
 # --- Risk Register synthesis -----------------------------------------------
-_RISK_SYNTHESIZE_PROMPT = """You are assisting a Kentro analyst drafting a Risk
+_RISK_SYNTHESIZE_PROMPT = f"""You are assisting a Kentro analyst drafting a Risk
 Register by synthesizing gaps and findings from a client's completed assessments
 (ATT&CK coverage gaps plus CSF and/or Zero Trust gaps). SUGGEST a draft only.
 
 For each finding draft one candidate entry: weakness title + description; SHIELD
 axis (detection, prevention, or response); the linked ATT&CK techniques and
 control references (you may ONLY cite techniques/controls that appear in the
-supplied assessments); likelihood (Very Low..Very High); impact
-(Negligible..Catastrophic); compensating controls; residual risk; and a
-recommended action (remediate, mitigate, accept, transfer, avoid) with rationale.
+supplied assessments); a likelihood and an impact; compensating controls;
+residual risk; and a recommended action with rationale.
+
+Use EXACTLY these lowercase snake_case tokens (no other spelling, casing, or
+spacing):
+- likelihood: very_low, low, medium, high, very_high
+- impact: negligible, minor, moderate, major, catastrophic
+- axis: detection, prevention, response
+- recommended_action: remediate, mitigate, accept, transfer, avoid
+
 Do NOT set the risk tier — code derives it from likelihood and impact. Return
-strictly JSON:
-{"entries": [{"title": "...", "description": "...", "axis": "detection|prevention|response",
-"linked_techniques": [...], "linked_controls": [...], "likelihood": "...",
-"impact": "...", "compensating_controls": "...", "residual_risk": "...",
-"recommended_action": "...", "rationale": "...",
-"source": "coverage_finding|questionnaire_response", "source_id": "..."}]}
+strictly JSON of this shape:
+{describe_shape("risk_synthesize")}
 """
 
 register_job(AIJob(name="risk_synthesize", prompt=_RISK_SYNTHESIZE_PROMPT, parser=parse_json))

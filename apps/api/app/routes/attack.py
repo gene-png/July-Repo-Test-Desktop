@@ -20,7 +20,7 @@ from collections.abc import Iterable
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ai.diff import diff_keyed_rows
@@ -50,7 +50,7 @@ from app.models.attack_assessment import (
     AttackAssessmentStatus,
     AttackCoverage,
 )
-from app.models.capability import CapabilityItem, CapabilityList
+from app.models.capability import CapabilityItem, CapabilityList, CapabilityListStatus
 from app.models.client import Client
 from app.models.deliverable import Deliverable
 from app.models.service import Service, ServiceKind, ServiceStatus
@@ -403,19 +403,39 @@ def _llm_dep() -> LLMClient:
 
 
 def _client_tool_names(db: Session, client_id: uuid.UUID) -> list[str]:
-    """Tool names from the client's Tech Debt capability list(s), if any.
+    """Approved tool universe from the client's Tech Debt capability lists.
 
     ATT&CK maps the client's security tooling to techniques; the canonical
-    source is the Tech Debt approved capability list (Work Order D2).
+    source is the Tech Debt APPROVED capability list (Work Order D2, G-2).
+    Only the latest APPROVED version per Tech Debt service counts — draft and
+    superseded versions are excluded so the mapping can't cite a tool the
+    consultant never signed off on. The result is the union across every Tech
+    Debt service the client owns. Empty when the client has no approved list.
     """
+    # Latest APPROVED version per Tech Debt service (version is unique per
+    # service, so (service_id, max_version) identifies exactly one list).
+    latest_approved = (
+        select(
+            CapabilityList.service_id.label("service_id"),
+            func.max(CapabilityList.version).label("version"),
+        )
+        .join(Service, CapabilityList.service_id == Service.id)
+        .where(
+            Service.client_id == client_id,
+            Service.kind == ServiceKind.TECH_DEBT,
+            CapabilityList.status == CapabilityListStatus.APPROVED,
+        )
+        .group_by(CapabilityList.service_id)
+        .subquery()
+    )
     names = (
         db.execute(
             select(CapabilityItem.name)
             .join(CapabilityList, CapabilityItem.capability_list_id == CapabilityList.id)
-            .join(Service, CapabilityList.service_id == Service.id)
-            .where(
-                Service.client_id == client_id,
-                Service.kind == ServiceKind.TECH_DEBT,
+            .join(
+                latest_approved,
+                (CapabilityList.service_id == latest_approved.c.service_id)
+                & (CapabilityList.version == latest_approved.c.version),
             )
         )
         .scalars()
@@ -464,6 +484,9 @@ def run_ai(
 
     tools = _client_tool_names(db, client.id)
     valid_tools = {t.lower() for t in tools}
+    warnings: list[str] = []
+    if not tools:
+        warnings.append("no approved capability list; mapping will cite no tools")
 
     rows = {
         r.technique_code: r
@@ -580,6 +603,7 @@ def run_ai(
         changed=changes,
         coverage=coverage,
         failed_batches=failed_batches,
+        warnings=warnings,
     )
 
 

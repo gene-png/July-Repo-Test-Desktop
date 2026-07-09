@@ -36,12 +36,18 @@ def render_xlsx(
     version: int,
     enterprise_rows: Sequence[Any],
     tier_profiles: Mapping[str, Sequence[Any]],
+    unscored_keys: frozenset[tuple[str, str]] | None = None,
 ) -> bytes:
     """`enterprise_rows` are EnterpriseSubcategory-like; `tier_profiles` maps a
-    tier name to its CsfDimensionScoreResponse-like rows (total/level computed)."""
+    tier name to its CsfDimensionScoreResponse-like rows (total/level computed).
+
+    `unscored_keys` is the set of (tier, subcategory_code) pairs whose row has no
+    scored_at stamp; those cells render "Unscored" rather than a misleading L1
+    computed from all-zero dimensions (B-3 belt-and-suspenders)."""
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill
 
+    unscored_keys = unscored_keys or frozenset()
     wb = Workbook()
     head_fill = PatternFill(start_color="FFEEF2F7", end_color="FFEEF2F7", fill_type="solid")
 
@@ -111,6 +117,7 @@ def render_xlsx(
             ],
         )
         for row in rows:
+            is_unscored = (tier, row.subcategory_code) in unscored_keys
             ts.append(
                 [
                     row.subcategory_code,
@@ -119,8 +126,8 @@ def render_xlsx(
                     row.implementation,
                     row.monitoring,
                     row.improvement,
-                    row.total,
-                    f"L{row.level}",
+                    "Unscored" if is_unscored else row.total,
+                    "Unscored" if is_unscored else f"L{row.level}",
                     "Yes" if row.evidence_capped else "",
                     "Yes" if row.in_scope else "No",
                     f"L{row.target_level}" if row.target_level else "",

@@ -120,6 +120,9 @@ class AttackRunAiResponse(BaseModel):
     # Batches (of the 600+ techniques) the AI provider couldn't reach this run.
     # >0 means partial coverage — re-run to fill the rest.
     failed_batches: int = 0
+    # Non-fatal advisories about this run (G-2). E.g. when the client has no
+    # approved capability list, the mapping can cite no tools.
+    warnings: list[str] = Field(default_factory=list)
 
 
 class AttackCoveragePatch(BaseModel):

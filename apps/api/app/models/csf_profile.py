@@ -10,9 +10,11 @@ math (total/level/evidence-cap/weighted-floor roll-up) is `app/csf/playbook.py`.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
+    DateTime,
     ForeignKey,
     SmallInteger,
     String,
@@ -51,6 +53,11 @@ class CsfDimensionScore(UUIDPKMixin, TimestampMixin, Base):
     implementation: Mapped[int] = mapped_column(SmallInteger, default=0, nullable=False)
     monitoring: Mapped[int] = mapped_column(SmallInteger, default=0, nullable=False)
     improvement: Mapped[int] = mapped_column(SmallInteger, default=0, nullable=False)
+
+    # Set the moment a row is actually scored (human PATCH or AI apply); stays
+    # null for seeded-but-untouched rows so the playbook export gate (B-3) can
+    # distinguish "0 because unscored" from "0 because scored zero".
+    scored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     in_scope: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     rationale: Mapped[str | None] = mapped_column(Text)

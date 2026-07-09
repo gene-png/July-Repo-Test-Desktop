@@ -31,7 +31,7 @@ from app.models.client import Client
 from app.models.llm_call import LLMCall
 from app.models.user import User
 from app.storage import StorageBackend
-from app.tech_debt.parsers import parse_inventory
+from app.tech_debt.parsers import EmptyInventoryError, parse_inventory
 
 PROMPT_VERSION = "v1"
 
@@ -83,6 +83,24 @@ class ExtractedCapability:
 class ExtractionResult:
     items: list[ExtractedCapability]
     llm_call: LLMCall
+    # True when the inventory was longer than parsers.MAX_ROWS and the tail
+    # was dropped before the model saw it. Surfaced in the extract response
+    # so the admin knows the list may be incomplete.
+    truncated: bool = False
+
+
+def _split_truncation_sentinel(
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], bool]:
+    """Peel the parsers.parse_inventory truncation sentinel off the tail.
+
+    parse_inventory appends a ``{"__truncated__": True, ...}`` marker row when
+    the input exceeded MAX_ROWS. That marker is a signal for us, not a data row
+    to hand the model, so we strip it here and return the truncated flag.
+    """
+    if rows and isinstance(rows[-1], dict) and rows[-1].get("__truncated__") is True:
+        return rows[:-1], True
+    return rows, False
 
 
 def _load_artifact_bytes(storage: StorageBackend, artifact: Artifact) -> bytes:
@@ -169,7 +187,12 @@ def extract_capabilities(
 ) -> ExtractionResult:
     """Top-level entry point used by the ingest route."""
     raw = _load_artifact_bytes(storage, artifact)
-    rows = parse_inventory(raw, artifact.mime_type)
+    rows, truncated = _split_truncation_sentinel(parse_inventory(raw, artifact.mime_type))
+    if not rows:
+        raise EmptyInventoryError(
+            "No data rows found in this file; check that the inventory is on "
+            "the first sheet with a header row"
+        )
 
     payload: dict[str, Any] = {
         "rows": rows,
@@ -193,7 +216,7 @@ def extract_capabilities(
         client_org_name=client_org_name,
         name_hints=tuple(name_hints),
     )
-    return ExtractionResult(items=result.data, llm_call=result.llm_call)
+    return ExtractionResult(items=result.data, llm_call=result.llm_call, truncated=truncated)
 
 
 def name_hints_for_tenant(db: Session, client_id) -> list[str]:

@@ -64,6 +64,9 @@ class CapabilityListResponse(BaseModel):
     items: list[CapabilityItemResponse]
     approved_at: datetime | None
     approved_by: uuid.UUID | None
+    # True when the source inventory exceeded the parser row cap and the tail
+    # was dropped before extraction (C-1). Only set by the extract endpoint.
+    truncated: bool = False
 
 
 class CapabilityItemPatch(BaseModel):

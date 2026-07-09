@@ -276,6 +276,10 @@ def test_ai_status_reports_fixture_mode(app_client: TestClient) -> None:
     assert body["mode"] == "fixture"
     assert body["ready"] is False
     assert "api_key" not in body and "anthropic_api_key" not in body
+    # A-5: readiness diagnostics + per-job overrides are always reported.
+    assert body["sdk_importable"] is True
+    assert body["per_job_overrides"]["csf_score"]["model"] == "claude-haiku-4-5"
+    assert body["per_job_overrides"]["mitre_map"]["max_tokens"] == 128000
 
     # Admin-only.
     assert (
@@ -284,6 +288,62 @@ def test_ai_status_reports_fixture_mode(app_client: TestClient) -> None:
         ).status_code
         == 403
     )
+
+
+def _live_settings(*, key: str):
+    from app.config import Settings
+
+    return Settings(
+        shield_llm_mode="live",
+        shield_llm_provider="anthropic",
+        shield_llm_model="claude-sonnet-5",
+        anthropic_api_key=key,
+    )
+
+
+@pytest.mark.unit
+def test_ai_status_live_ready(app_client: TestClient, monkeypatch) -> None:
+    from app.routes import admin as admin_routes
+
+    admin_bearer = register_admin(app_client, "admin@example.com")["tokens"]["access_token"]
+    monkeypatch.setattr(admin_routes, "get_settings", lambda: _live_settings(key="sk-live-xyz"))
+
+    r = app_client.get("/admin/ai-status", headers={"Authorization": f"Bearer {admin_bearer}"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["mode"] == "live"
+    assert body["ready"] is True
+    assert body["key_present"] is True and body["sdk_importable"] is True
+    # Key value itself never leaks.
+    assert "sk-live-xyz" not in r.text
+
+
+@pytest.mark.unit
+def test_ai_status_live_missing_key_raises_503(app_client: TestClient, monkeypatch) -> None:
+    from app.routes import admin as admin_routes
+
+    admin_bearer = register_admin(app_client, "admin@example.com")["tokens"]["access_token"]
+    monkeypatch.setattr(admin_routes, "get_settings", lambda: _live_settings(key=""))
+
+    r = app_client.get("/admin/ai-status", headers={"Authorization": f"Bearer {admin_bearer}"})
+    assert r.status_code == 503, r.text
+    # Typed {reason, message} pattern surfaces through the global handler.
+    detail = r.json()["error"]["message"]
+    assert detail["reason"] == "missing_api_key"
+
+
+@pytest.mark.unit
+def test_ai_status_live_missing_sdk_raises_503(app_client: TestClient, monkeypatch) -> None:
+    from app.ai import llm
+    from app.routes import admin as admin_routes
+
+    admin_bearer = register_admin(app_client, "admin@example.com")["tokens"]["access_token"]
+    monkeypatch.setattr(admin_routes, "get_settings", lambda: _live_settings(key="sk-live-xyz"))
+    monkeypatch.setattr(llm, "anthropic_sdk_available", lambda: False)
+
+    r = app_client.get("/admin/ai-status", headers={"Authorization": f"Bearer {admin_bearer}"})
+    assert r.status_code == 503, r.text
+    assert r.json()["error"]["message"]["reason"] == "sdk_unavailable"
 
 
 @pytest.mark.unit

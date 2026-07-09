@@ -175,6 +175,11 @@ def _gather_findings(db: Session, client_id: uuid.UUID) -> tuple[list[dict], set
 
 
 def _enum_or_none(enum_cls, value):
+    # Normalize a model-supplied token before coercion (Task S1-A A-4): the
+    # enums are lowercase snake_case, so tolerate "Very Low" / " HIGH " and map
+    # them to very_low / high before looking them up. Unknown tokens -> None.
+    if isinstance(value, str):
+        value = value.strip().lower().replace(" ", "_")
     try:
         return enum_cls(value)
     except (ValueError, KeyError):
@@ -226,11 +231,16 @@ def generate(
     if prior is not None:
         prior.superseded_by = register.id
 
+    unrecognized = 0
     for raw in data.get("entries", []):
         if not isinstance(raw, dict) or not raw.get("title"):
             continue
         lk = _enum_or_none(Likelihood, raw.get("likelihood"))
         im = _enum_or_none(Impact, raw.get("impact"))
+        # Count entries where a supplied likelihood/impact failed to coerce so the
+        # response can warn the analyst (Task S1-A A-4).
+        if (raw.get("likelihood") and lk is None) or (raw.get("impact") and im is None):
+            unrecognized += 1
         # Tier is ALWAYS code-derived, never AI-set.
         tier = tier_for(lk, im).value if (lk is not None and im is not None) else None
         techs = [t for t in (raw.get("linked_techniques") or []) if t in valid_techniques]
@@ -269,7 +279,10 @@ def generate(
         details={"version": next_version, "findings": len(findings)},
     )
     db.commit()
-    return _serialize(db, register)
+    resp = _serialize(db, register)
+    if unrecognized:
+        resp.warnings = [f"{unrecognized} entries had unrecognized likelihood/impact"]
+    return resp
 
 
 def _write_artifact(

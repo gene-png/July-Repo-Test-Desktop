@@ -25,6 +25,13 @@ class AdminServiceDetail(BaseModel):
     client_id: uuid.UUID
 
 
+class AiJobOverride(BaseModel):
+    """Per-job provider override reported by ai-status (Task S1-A A-3/A-5)."""
+
+    model: str | None = None
+    max_tokens: int | None = None
+
+
 class AdminAiStatus(BaseModel):
     """AI pipeline readiness. Never includes the API key itself."""
 
@@ -33,6 +40,11 @@ class AdminAiStatus(BaseModel):
     model: str
     ready: bool
     detail: str
+    # Boot-readiness diagnostics (Task S1-A A-5).
+    sdk_importable: bool
+    key_present: bool
+    # name -> {model, max_tokens} for every job that overrides the global model.
+    per_job_overrides: dict[str, AiJobOverride] = {}
 
 
 class AdminUserSummary(BaseModel):

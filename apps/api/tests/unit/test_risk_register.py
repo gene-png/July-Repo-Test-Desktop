@@ -167,6 +167,68 @@ def test_export_renders_and_stores_three_files(app_client) -> None:
 
 
 @pytest.mark.unit
+def test_enum_or_none_normalizes_casing_and_spaces() -> None:
+    from app.risk.engine import Impact, Likelihood
+    from app.routes.risk import _enum_or_none
+
+    assert _enum_or_none(Likelihood, "Very Low") is Likelihood.VERY_LOW
+    assert _enum_or_none(Likelihood, "  HIGH ") is Likelihood.HIGH
+    assert _enum_or_none(Impact, "Catastrophic") is Impact.CATASTROPHIC
+    assert _enum_or_none(Impact, "Very High") is None  # not an Impact token
+    assert _enum_or_none(Likelihood, "banana") is None
+    assert _enum_or_none(Likelihood, None) is None
+
+
+@pytest.mark.unit
+def test_generate_normalizes_enums_and_no_warning(app_client) -> None:
+    c, provider = app_client
+    bearer, cid = _admin(c)
+    technique, capability = _seed_attack_and_zt(c, bearer, cid)
+    bh = {"Authorization": f"Bearer {bearer}"}
+    # Model returns display-cased tokens; normalization must still coerce them.
+    provider.register_static(
+        "risk_synthesize",
+        LLMResponse(
+            '{"entries": [{"title": "Cased tokens", "axis": "detection",'
+            ' "likelihood": "Very High", "impact": "Major",'
+            ' "recommended_action": "remediate"}]}'
+        ),
+    )
+    r = c.post(f"/risk/clients/{cid}/register/generate", headers=bh)
+    assert r.status_code == 201, r.text
+    body = r.json()
+    e = body["entries"][0]
+    assert e["likelihood"] == "very_high" and e["impact"] == "major"
+    # Very High + Major -> Critical (code-derived).
+    assert e["tier"] == "critical"
+    assert body["warnings"] == []
+
+
+@pytest.mark.unit
+def test_generate_warns_on_unrecognized_likelihood_impact(app_client) -> None:
+    c, provider = app_client
+    bearer, cid = _admin(c)
+    _seed_attack_and_zt(c, bearer, cid)
+    bh = {"Authorization": f"Bearer {bearer}"}
+    provider.register_static(
+        "risk_synthesize",
+        LLMResponse(
+            '{"entries": ['
+            '{"title": "Bad likelihood", "axis": "detection",'
+            ' "likelihood": "extremely_high", "impact": "major",'
+            ' "recommended_action": "remediate"},'
+            '{"title": "Bad impact", "axis": "detection",'
+            ' "likelihood": "high", "impact": "apocalyptic",'
+            ' "recommended_action": "remediate"}]}'
+        ),
+    )
+    r = c.post(f"/risk/clients/{cid}/register/generate", headers=bh)
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["warnings"] == ["2 entries had unrecognized likelihood/impact"]
+
+
+@pytest.mark.unit
 def test_each_generate_is_a_new_version(app_client) -> None:
     c, provider = app_client
     bearer, cid = _admin(c)

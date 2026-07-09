@@ -22,11 +22,25 @@ class UnsupportedInventoryFormat(ValueError):
     """Raised when an artifact's MIME isn't a recognized inventory format."""
 
 
+class EmptyInventoryError(ValueError):
+    """Raised when a recognized inventory file yields zero data rows."""
+
+
+class CorruptInventoryError(ValueError):
+    """Raised when a file claims to be XLSX but can't be opened as one.
+
+    A legacy OLE2 .xls mislabeled as XLSX, or a truncated/corrupt upload,
+    lands here so the route can return a clean 422 instead of a 500.
+    """
+
+
 # MIME types that the ingest endpoint accepts.
+# Legacy application/vnd.ms-excel (.xls, OLE2) is intentionally absent:
+# openpyxl cannot read OLE2, so it must be rejected up front (see the route)
+# rather than exploding at parse time.
 SUPPORTED_MIME = {
     "text/csv": "csv",
     "text/plain": "csv",  # treat .txt as CSV; most inventory exports save this way
-    "application/vnd.ms-excel": "xlsx",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
 }
 
@@ -77,9 +91,19 @@ def _parse_csv(data: bytes) -> Iterable[dict[str, Any]]:
 def _parse_xlsx(data: bytes) -> Iterable[dict[str, Any]]:
     # openpyxl is lazy-imported so test runs that don't touch XLSX don't
     # pay the import cost.
-    from openpyxl import load_workbook
+    from zipfile import BadZipFile
 
-    wb = load_workbook(filename=io.BytesIO(data), read_only=True, data_only=True)
+    from openpyxl import load_workbook
+    from openpyxl.utils.exceptions import InvalidFileException
+
+    try:
+        wb = load_workbook(filename=io.BytesIO(data), read_only=True, data_only=True)
+    except (BadZipFile, InvalidFileException) as exc:
+        raise CorruptInventoryError(
+            "This file could not be opened as an .xlsx workbook. "
+            "It may be a legacy .xls or a corrupt upload; re-save it as .xlsx "
+            "and try again."
+        ) from exc
     ws = wb.active
     if ws is None:
         return

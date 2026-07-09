@@ -18,6 +18,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.ai.engine import get_job, registered_jobs
+from app.ai.llm import LLMClient, LLMConfigurationError, anthropic_sdk_available
 from app.audit import audit
 from app.config import get_settings
 from app.db.session import get_db
@@ -47,6 +49,7 @@ from app.schemas.admin import (
     AdminUserDetail,
     AdminUserListResponse,
     AdminUserSummary,
+    AiJobOverride,
     FulfillServiceRequestResponse,
 )
 from app.schemas.intake import ClientProfileResponse
@@ -648,13 +651,23 @@ def ai_status(_admin: Annotated[User, _admin_required]) -> AdminAiStatus:
     """Report whether AI features will actually run a live call.
 
     `ready` is true only when a real provider call will be made. Fixture mode
-    (and live mode missing its key) report ready=false with a reason. The API
-    key itself is never returned.
+    reports ready=false. In LIVE mode a missing SDK or API key is a hard
+    misconfiguration and raises the typed {reason, message} error mapped to 503
+    (Task S1-A A-5) instead of silently reporting not-ready. The API key itself
+    is never returned; only whether one is present.
     """
     s = get_settings()
     mode = s.shield_llm_mode
     provider = s.shield_llm_provider
     model = s.shield_llm_model
+    sdk_importable = anthropic_sdk_available()
+    key_present = bool(s.anthropic_api_key)
+
+    overrides: dict[str, AiJobOverride] = {}
+    for name in registered_jobs():
+        job = get_job(name)
+        if job.model is not None or job.max_tokens is not None:
+            overrides[name] = AiJobOverride(model=job.model, max_tokens=job.max_tokens)
 
     if mode != "live":
         return AdminAiStatus(
@@ -666,19 +679,28 @@ def ai_status(_admin: Annotated[User, _admin_required]) -> AdminAiStatus:
                 "Running in fixture mode — AI features are disabled. Set "
                 "SHIELD_LLM_MODE=live and ANTHROPIC_API_KEY to enable."
             ),
+            sdk_importable=sdk_importable,
+            key_present=key_present,
+            per_job_overrides=overrides,
         )
-    if provider == "anthropic" and not s.anthropic_api_key:
-        return AdminAiStatus(
-            mode=mode,
-            provider=provider,
-            model=model,
-            ready=False,
-            detail="Live mode is on but ANTHROPIC_API_KEY is not set.",
-        )
+
+    # Live mode: build the provider to reuse the eager SDK + key checks (A-1),
+    # surfacing any configuration failure as a typed 503.
+    try:
+        LLMClient.from_settings(s)
+    except LLMConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"reason": exc.reason, "message": exc.message},
+        ) from exc
+
     return AdminAiStatus(
         mode=mode,
         provider=provider,
         model=model,
         ready=True,
         detail=f"Live AI configured ({provider}/{model}).",
+        sdk_importable=sdk_importable,
+        key_present=key_present,
+        per_job_overrides=overrides,
     )

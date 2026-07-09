@@ -1069,8 +1069,29 @@ def finalize_zt_deliverable(
     notes_map: dict[str, str | None] = {
         r.capability_code: r.notes for r in answers if r.capability_code in valid
     }
+    targets_map: dict[str, int | None] = {
+        r.capability_code: r.target_stage for r in answers if r.capability_code in valid
+    }
+    # Engagement-level target: the client's intake goal via the source request,
+    # falling back to the engine default only when neither per-capability
+    # targets nor an intake goal exists (B-1). Mirrors the dashboard endpoint.
+    engagement_target = _client_target_stage(db, svc.id)
     score = compute_score(cat_fw, stage_map)
-    gap = analyze_gaps(cat_fw, stage_map, notes=notes_map)
+    if engagement_target is not None:
+        gap = analyze_gaps(
+            cat_fw,
+            stage_map,
+            notes=notes_map,
+            target_stage=engagement_target,
+            targets=targets_map,
+        )
+    else:
+        gap = analyze_gaps(
+            cat_fw,
+            stage_map,
+            notes=notes_map,
+            targets=targets_map,
+        )
 
     client_name = client.legal_name
     if client_name == "(pending intake)":

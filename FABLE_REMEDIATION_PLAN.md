@@ -276,7 +276,23 @@ Filled in as sprints complete. Format per fix: what changed, subagent, files, te
 
 ### Sprint 1 evidence
 
-(pending)
+All three implementation tasks were done by Opus subagents; the lead reviewed every diff before the gate.
+
+- A-1 (subagent S1-A): eager SDK import + key check in \_build_provider for live mode, raising typed LLMConfigurationError(reason, message) at boot instead of first click. Files: ai/llm.py. Tests: boot import-check tests in test_ai_contracts.py.
+- A-2 (S1-A): CSF prompt rewritten to the route's shape (scores keyed tier|subcategory_code) via the new shared ai/contracts.py descriptors; payload now grounded with per-row questionnaire answers (tier, notes), evidence flags, in_scope and rationale through the redaction path. Files: ai/contracts.py (new), ai/jobs.py, routes/csf.py. Tests: contract round-trip test proves a schema-conformant response changes rows.
+- A-3 adjusted (S1-A): AIJob gains model/max_tokens; threaded engine -> client -> provider; csf_score and mitre_map run claude-haiku-4-5 at 128000 tokens; others inherit the global model with DEFAULT_MAX_TOKENS=16000. llm_calls rows record the effective model. Files: ai/engine.py, ai/llm.py, ai/jobs.py.
+- A-4 (S1-A): risk prompt states exact snake_case tokens; \_enum_or_none normalizes before coercion; generate response carries warnings with the unrecognized-count. Files: ai/jobs.py, routes/risk.py, schemas/risk.py. Tests: normalization plus warnings, 3 cases.
+- A-5 (S1-A): default model claude-sonnet-5 (verified current against platform docs) in config, .env.example, docker-compose; ai-status reports sdk_importable, key_present, per-job overrides; live misconfiguration returns typed 503. Files: config.py, routes/admin.py, schemas/admin.py.
+- B-1 (S1-B): ZT finalize passes per-capability targets plus the engagement target from the originating ServiceRequest into analyze_gaps, mirroring the dashboard; summary line prints the resolved target. Regression test: engagement target 4, capabilities below target, XLSX Gap Plan row count equals dashboard total_gap_count.
+- B-2 (S1-B): CSF finalize resolves csf_target_tier (fallback 3) and passes target_tier; mirror regression test with tiers.
+- B-3 (S1-B): scored_at column (migration 0029, batch-safe, up/down tested); stamped on human PATCH and AI apply; seeding leaves null; export 409s with unscored counts or missing approval; exporter renders "Unscored" as belt and suspenders; documents_stale cleared only past the gate. Tests: seed->409 ("318 of 318 in-scope rows are unscored"), scored-unapproved->409, scored+approved->200 with no Unscored cells.
+- C-1 remaining (S1-C): typed 422 on zero data rows before any LLM call; **truncated** sentinel stripped from the model payload and surfaced as truncated in the response. Tests assert no llm_calls row is written for empty input and exactly 500 rows reach the model for a 501-row file.
+- C-2 (S1-C): vnd.ms-excel removed from API allowlist and parser map; .xls upload returns 415 with re-save instruction; corrupt .xlsx returns 422 (BadZipFile/InvalidFileException caught); .xls removed from all three frontend accept lists.
+- G-2 (S1-C): tool universe now the latest APPROVED capability list per tech-debt service, unioned across services; empty universe adds the warning to the run-ai response. Tests: draft-only lists yield empty universe plus warning; approved v2 excludes v1 ghosts.
+
+Gate results: full unit suite 510 tests, 0 failures, 0 errors (junit-verified; +96 tests over baseline). ruff, black, bandit clean; prettier, eslint, tsc clean; Next production build green. Playwright: 5/5 passing twice consecutively (smoke x2 plus C-1 empty-CSV error pill through the real UI, C-2 accept-list plus proxy 415, B-3 export gate 409 end to end through the live API). No product bugs found by QA. Ops finding fixed by lead: scripts/e2e-stack.sh stop now reaps orphaned servers so stale code can never silently serve during validation.
+
+Remaining issues carried forward: none within Sprint 1 scope. Live-mode smoke against the real Anthropic API remains deferred (no key in this environment), covered by the env-gated smoke test added in Sprint 2 (A-6).
 
 ### Sprint 2 evidence
 

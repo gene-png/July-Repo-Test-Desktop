@@ -63,3 +63,6 @@ class RiskRegisterResponse(BaseModel):
     tier_counts: dict[str, int] = {}
     axis_counts: dict[str, int] = {}
     action_counts: dict[str, int] = {}
+    # Non-fatal advisories from the last generate (Task S1-A A-4), e.g. a count
+    # of entries whose likelihood/impact the model returned in an unknown form.
+    warnings: list[str] = []

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterator
 from pathlib import Path
@@ -113,6 +114,43 @@ def test_csf_run_ai_skips_locked(app_client) -> None:
     row = next(x for x in r.json()["rows"] if x["subcategory_code"] == code and x["tier"] == "high")
     assert row["governance"] == 0
     assert all(ch["subcategory_code"] != code for ch in r.json()["changed"])
+
+
+@pytest.mark.unit
+def test_csf_contract_conformant_response_changes_a_row(app_client) -> None:
+    """A response built to the documented csf_score contract, applied through the
+    route, changes at least one row (Task S1-A A-1/A-2 acceptance)."""
+    from app.ai.contracts import get_shape
+
+    c, provider = app_client
+    h, svc_id = _bootstrap(c)
+    code = SUBCATEGORIES[0].code
+
+    # Sanity: the contract keys are the ones the route consumes.
+    assert "tier" in get_shape("csf_score")["scores"][0]
+
+    conformant = {
+        "scores": [
+            {
+                "tier": "high",
+                "subcategory_code": code,
+                "governance": 2,
+                "policy": 2,
+                "implementation": 1,
+                "monitoring": 1,
+                "improvement": 2,
+                "what_we_found": "Documented and enforced.",
+            }
+        ],
+        "executive_summary": "draft",
+    }
+    provider.register_static("csf_score", LLMResponse(json.dumps(conformant)))
+    r = c.post(f"/csf/services/{svc_id}/run-ai", headers=h)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    row = next(x for x in body["rows"] if x["subcategory_code"] == code and x["tier"] == "high")
+    assert row["governance"] == 2 and row["improvement"] == 2
+    assert body["changed"], "a schema-conformant response must change at least one row"
 
 
 @pytest.mark.unit

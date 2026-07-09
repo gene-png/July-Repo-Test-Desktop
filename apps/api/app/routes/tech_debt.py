@@ -63,7 +63,12 @@ from app.tech_debt.filename import (
     deliverable_filename,
 )
 from app.tech_debt.overlap import analyze_overlap
-from app.tech_debt.parsers import SUPPORTED_MIME, UnsupportedInventoryFormat
+from app.tech_debt.parsers import (
+    SUPPORTED_MIME,
+    CorruptInventoryError,
+    EmptyInventoryError,
+    UnsupportedInventoryFormat,
+)
 from app.tenant import (
     require_artifact_in_tenant,
     require_service_in_tenant,
@@ -128,7 +133,9 @@ def _latest_list_or_none(db: Session, service_id: uuid.UUID) -> CapabilityList |
     ).scalar_one_or_none()
 
 
-def _serialize_list_with_items(db: Session, cap_list: CapabilityList) -> CapabilityListResponse:
+def _serialize_list_with_items(
+    db: Session, cap_list: CapabilityList, *, truncated: bool = False
+) -> CapabilityListResponse:
     items = (
         db.execute(select(CapabilityItem).where(CapabilityItem.capability_list_id == cap_list.id))
         .scalars()
@@ -142,6 +149,7 @@ def _serialize_list_with_items(db: Session, cap_list: CapabilityList) -> Capabil
         items=[CapabilityItemResponse.model_validate(i, from_attributes=True) for i in items],
         approved_at=cap_list.approved_at,
         approved_by=cap_list.approved_by,
+        truncated=truncated,
     )
 
 
@@ -182,6 +190,15 @@ def extract_capability_list(
     except UnsupportedInventoryFormat as exc:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=str(exc),
+        ) from exc
+    except (EmptyInventoryError, CorruptInventoryError) as exc:
+        # No usable data rows (empty/header-only file) or an unreadable
+        # workbook (legacy .xls, corrupt upload). This is a client-side data
+        # problem, not an upstream AI failure, and no llm_calls row was
+        # written yet because we bail before run_job.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
     except ValueError as exc:
@@ -232,7 +249,7 @@ def extract_capability_list(
     )
     db.commit()
     db.refresh(cap_list)
-    return _serialize_list_with_items(db, cap_list)
+    return _serialize_list_with_items(db, cap_list, truncated=result.truncated)
 
 
 @router.get(
