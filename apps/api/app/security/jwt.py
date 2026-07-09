@@ -28,7 +28,11 @@ from app.config import get_settings
 
 ISSUER = "shield-api"
 ALGORITHM = "HS256"
-TokenType = Literal["access", "refresh"]
+# "mfa_challenge" is a short-lived intermediate token minted by /auth/login when
+# the user has MFA enrolled: it proves the password step passed but carries no
+# authority of its own. verify_token(expected_type=...) keeps it strictly
+# separate from access/refresh, so it can never be presented as a session token.
+TokenType = Literal["access", "refresh", "mfa_challenge"]
 
 
 class TokenError(ValueError):
@@ -46,9 +50,13 @@ class TokenPayload:
 
 def _ttl_for(typ: TokenType) -> timedelta:
     s = get_settings()
-    return timedelta(
-        seconds=s.jwt_access_ttl_seconds if typ == "access" else s.jwt_refresh_ttl_seconds
-    )
+    if typ == "access":
+        seconds = s.jwt_access_ttl_seconds
+    elif typ == "mfa_challenge":
+        seconds = s.jwt_mfa_challenge_ttl_seconds
+    else:
+        seconds = s.jwt_refresh_ttl_seconds
+    return timedelta(seconds=seconds)
 
 
 def _now() -> datetime:
@@ -109,7 +117,7 @@ def verify_token(token: str, *, expected_type: TokenType | None = None) -> Token
     typ = claims.get("typ")
     if expected_type is not None and typ != expected_type:
         raise TokenError(f"Token type mismatch: expected {expected_type}, got {typ}")
-    if typ not in ("access", "refresh"):
+    if typ not in ("access", "refresh", "mfa_challenge"):
         raise TokenError(f"Unknown token type: {typ!r}")
 
     try:

@@ -202,4 +202,36 @@ on every use with server-side records; reusing a rotated token revokes the
 whole session family; logout revokes server-side; idle timeout and forced
 re-auth are enforced on `/auth/refresh` via `SHIELD_IDLE_TIMEOUT_SECONDS` /
 `SHIELD_FORCED_REAUTH_SECONDS` (0 disables). The RESERVED annotations were
-removed everywhere. Remaining scope: MFA (TOTP) and email verification.
+removed everywhere.
+
+**Update (2026-07-09, item 4 landed):** MFA (TOTP) and email verification
+shipped (migration `0038_mfa_email_verify`, `routes/auth.py`,
+`notifications/email.py`, frontend sign-in / account / verify-email).
+
+- **TOTP MFA** (`pyotp`): `POST /auth/mfa/enroll` mints a base32 secret +
+  otpauth URI (issuer "SHIELD by Kentro") stored on the user but _not_ active;
+  `/auth/mfa/activate` flips `mfa_enrolled` only after a live code verifies;
+  `/auth/mfa/disable` clears it (also requires a current code). An enrolled
+  user's `/auth/login` returns `{mfa_required: true, challenge_token}` (a
+  5-minute JWT with `typ=mfa_challenge`, kept strictly separate from
+  access/refresh by `verify_token`) instead of tokens; `/auth/mfa/verify`
+  exchanges the challenge + code for the normal pair. A wrong code counts toward
+  the existing lockout counters.
+- **`SHIELD_AUTH_REQUIRE_MFA` semantics (scoped):** the flag only drives the
+  frontend nudge — an enrolled-less user still logs in, but the login response
+  carries `mfa_setup_required: true`. It blocks **nothing** server-side today.
+  **Future hardening:** promote this to a server-side gate that refuses
+  non-enrolled users (or forces enrollment) once organizational rollout is
+  ready; deliberately out of scope here to avoid locking existing users out.
+- **Email verification:** every registration mints a `secrets.token_urlsafe`
+  token (only its sha256 stored, table `email_verification_tokens`, 24h expiry)
+  and best-effort emails the `/verify-email?token=...` link (SMTP send never
+  blocks or fails registration; gated by `SHIELD_EMAIL_DELIVERY_ENABLED`).
+  `/auth/verify-email` consumes it; `/auth/resend-verification` invalidates
+  prior tokens. When `SHIELD_AUTH_REQUIRE_EMAIL_VERIFY` is on, `/auth/login`
+  returns 403 for an unverified account **after** the password check, so it
+  can't be used as an account-existence oracle.
+
+Item 4 completes the D-017 package. The login response gained a superset shape
+(`LoginResponse`): the token fields are unchanged for MFA-off callers, with
+additive `mfa_required` / `challenge_token` / `mfa_setup_required` fields.

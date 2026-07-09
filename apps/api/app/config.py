@@ -96,7 +96,16 @@ class Settings(BaseSettings):
     # the test suite (which overrides the DB session per-test).
     shield_run_startup_maintenance: bool = True
 
-    # Feature flags (Master Spec §2 - deferred for v1)
+    # Feature flags (Master Spec §2). Landed in the D-017 auth package (July 2026):
+    #   * SHIELD_AUTH_REQUIRE_MFA: when true, users WITHOUT a TOTP factor can still
+    #     log in, but the login response carries `mfa_setup_required: true` so the
+    #     frontend can nudge enrollment. This flag does NOT block any server-side
+    #     route today; hard server-side enforcement is a future hardening step
+    #     (see DECISIONS D-017). Users who HAVE enrolled always get the TOTP
+    #     challenge regardless of this flag.
+    #   * SHIELD_AUTH_REQUIRE_EMAIL_VERIFY: when true, login is refused with 403
+    #     until the account's email is verified (checked only after the password
+    #     verifies, so it can't be used as an account-existence oracle).
     shield_auth_require_mfa: bool = False
     shield_auth_require_email_verify: bool = False
     shield_email_delivery_enabled: bool = False
@@ -107,6 +116,10 @@ class Settings(BaseSettings):
     # Session security (Master Spec §4.5)
     jwt_access_ttl_seconds: int = Field(default=900, ge=60)
     jwt_refresh_ttl_seconds: int = Field(default=1800, ge=300)
+    # TTL of the intermediate MFA-challenge token issued by /auth/login when a
+    # user has a TOTP factor. Short: the user must enter their 6-digit code
+    # within this window (default 5 min).
+    jwt_mfa_challenge_ttl_seconds: int = Field(default=300, ge=30)
     shield_account_lockout_max_attempts: int = Field(default=10, ge=1)
     shield_account_lockout_window_seconds: int = Field(default=900, ge=60)
     # ENFORCED session controls (D-017 auth package, July 9 2026): checked
@@ -130,6 +143,11 @@ class Settings(BaseSettings):
     smtp_host: str = "mailhog"
     smtp_port: int = 1025
     smtp_from: str = "no-reply@shield.local"
+    # Base URL the frontend is served from, used to build absolute links in
+    # outbound email (e.g. the email-verification link). Empty -> a root-relative
+    # path ("/verify-email?token=..."), which works when mail is viewed in the
+    # same origin (dev/MailHog).
+    shield_frontend_base_url: str = ""
 
     def is_production(self) -> bool:
         return self.environment == "production"

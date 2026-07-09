@@ -44,6 +44,54 @@ class TokenPairResponse(BaseModel):
     refresh_expires_at: datetime
 
 
+class LoginResponse(BaseModel):
+    """Two documented shapes behind one model (keeps OpenAPI honest):
+
+    * Completed login - the token fields are populated exactly as the old
+      TokenPairResponse (unchanged for MFA-off callers), ``mfa_required`` false.
+    * TOTP challenge - ``mfa_required`` is true and ``challenge_token`` carries
+      a 5-minute JWT; the token fields stay null until the caller posts the code
+      to /auth/mfa/verify.
+
+    ``mfa_setup_required`` is an advisory nudge set when SHIELD_AUTH_REQUIRE_MFA
+    is on but the user has no factor yet (does not block login server-side).
+    """
+
+    access_token: str | None = None
+    refresh_token: str | None = None
+    token_type: str = "bearer"  # noqa: S105 - OAuth 2.0 token_type field, not a credential
+    access_expires_at: datetime | None = None
+    refresh_expires_at: datetime | None = None
+
+    mfa_required: bool = False
+    challenge_token: str | None = None
+    mfa_setup_required: bool = False
+
+
+class MfaEnrollResponse(BaseModel):
+    """Returned by /auth/mfa/enroll. The secret is shown ONCE for manual entry;
+    otpauth_uri feeds an authenticator-app QR. MFA is not active until the user
+    proves possession via /auth/mfa/activate."""
+
+    secret: str
+    otpauth_uri: str
+
+
+class MfaCodeRequest(BaseModel):
+    """A 6-digit TOTP code (activate / disable / verify)."""
+
+    code: str = Field(min_length=6, max_length=10)
+
+
+class MfaVerifyRequest(BaseModel):
+    challenge_token: str
+    code: str = Field(min_length=6, max_length=10)
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=512)
+
+
 class UserResponse(BaseModel):
     id: uuid.UUID
     email: EmailStr

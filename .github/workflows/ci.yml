@@ -254,5 +254,9 @@ jobs:
         working-directory: apps/api
         run: alembic upgrade head
 
+      - name: Postgres integration tests (advisory locks)
+        working-directory: apps/api
+        run: pytest -m integration tests/integration
+
       - name: Restore drill
         run: python scripts/restore_drill.py
