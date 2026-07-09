@@ -103,3 +103,156 @@ jobs:
       - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Full-stack Playwright suite against the real services, mirroring the local
+  # runbook (scripts/e2e-stack.sh + .env.e2e). Runs after the cheap gates.
+  e2e:
+    name: E2E (Playwright against the composed stack)
+    runs-on: ubuntu-latest
+    needs: [python, web]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: shield
+          POSTGRES_PASSWORD: shield
+          POSTGRES_DB: shield
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U shield" --health-interval 5s
+          --health-timeout 5s --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s
+          --health-timeout 5s --health-retries 12
+      minio:
+        # Official minio needs a `server` command; this image bakes it in and
+        # keeps GitHub's services syntax (no command override support) happy.
+        image: bitnami/minio:latest
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin
+          MINIO_DEFAULT_BUCKETS: shield-artifacts
+        ports: ["9000:9000"]
+    env:
+      DATABASE_URL: postgresql+psycopg://shield:shield@localhost:5432/shield
+      REDIS_URL: redis://localhost:6379/0
+      S3_ENDPOINT_URL: http://localhost:9000
+      S3_BUCKET: shield-artifacts
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_KMS_KEY_ID: dev-stub-key
+      ENVIRONMENT: development
+      SHIELD_LLM_MODE: fixture
+      JWT_SIGNING_SECRET: ci-e2e-jwt-secret-not-production-0000000000
+      SHIELD_BOOTSTRAP_ADMIN_EMAIL: admin@shield.local
+      SHIELD_BOOTSTRAP_ADMIN_PASSWORD: ci-e2e-admin-password-1234
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: ci-only-not-a-real-secret-1234567890
+      API_BASE_URL: http://localhost:8000
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install API
+        working-directory: apps/api
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Build web
+        run: pnpm -F web build
+
+      - name: Migrate and seed
+        working-directory: apps/api
+        run: |
+          alembic upgrade head
+          python scripts/seed_demo.py
+          python -m scripts.load_csf_tier_questionnaires
+          python -m scripts.load_zt_questionnaires
+
+      - name: Start API and web
+        run: |
+          (cd apps/api && nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/shield-api.log 2>&1 &)
+          (cd apps/web && nohup node_modules/.bin/next start -p 3000 > /tmp/shield-web.log 2>&1 &)
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8000/health >/dev/null && curl -sf http://localhost:3000 >/dev/null && exit 0
+            sleep 2
+          done
+          echo "stack failed to come up" >&2
+          tail -50 /tmp/shield-api.log /tmp/shield-web.log >&2
+          exit 1
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Playwright suite
+        run: npx playwright test
+
+      - name: Upload report and server logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: |
+            e2e-report/
+            test-results/
+            /tmp/shield-api.log
+            /tmp/shield-web.log
+          retention-days: 7
+
+  # H-3: the backup/restore drill must stay green forever. Mirrors
+  # `make restore-drill` from the local runbook (docs/runbooks/backup-restore.md).
+  restore-drill:
+    name: Backup/restore drill
+    runs-on: ubuntu-latest
+    needs: [python]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: shield
+          POSTGRES_PASSWORD: shield
+          POSTGRES_DB: shield
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U shield" --health-interval 5s
+          --health-timeout 5s --health-retries 12
+    env:
+      DATABASE_URL: postgresql+psycopg://shield:shield@localhost:5432/shield
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install API and postgres client
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q postgresql-client
+          python -m pip install --upgrade pip
+          pip install -e "apps/api[dev]"
+
+      - name: Migrate
+        working-directory: apps/api
+        run: alembic upgrade head
+
+      - name: Restore drill
+        run: python scripts/restore_drill.py
