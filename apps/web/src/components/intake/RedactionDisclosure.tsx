@@ -1,5 +1,7 @@
 import { Card, CardBody, CardHeader, CardTitle } from "@shield/design-system";
 
+import type { JSX } from "react";
+
 /**
  * Plain-English disclosure explaining what happens to uploaded documents.
  *

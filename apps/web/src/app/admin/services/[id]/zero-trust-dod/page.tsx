@@ -3,15 +3,16 @@ import type { Metadata } from "next";
 import { EnsureActiveClient } from "@/components/admin/EnsureActiveClient";
 import { ZtWorkspace } from "@/components/admin/zt/ZtWorkspace";
 
+import type { JSX } from "react";
+
 export const metadata: Metadata = {
   title: "Zero Trust (DoD ZTRA) service",
 };
 
-export default function ZtDodServicePage({
-  params,
-}: {
-  params: { id: string };
-}): JSX.Element {
+export default async function ZtDodServicePage(props: {
+  params: Promise<{ id: string }>;
+}): Promise<JSX.Element> {
+  const params = await props.params;
   return (
     <EnsureActiveClient serviceId={params.id}>
       <ZtWorkspace

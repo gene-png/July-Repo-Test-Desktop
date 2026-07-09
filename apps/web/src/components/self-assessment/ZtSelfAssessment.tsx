@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -27,6 +26,8 @@ import type {
   ZtCatalog,
   ZtFramework,
 } from "@/lib/zt/types";
+
+import type { JSX } from "react";
 
 export function ZtSelfAssessment({
   serviceId,

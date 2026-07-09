@@ -1,6 +1,7 @@
 "use client";
-
 import { signOut } from "next-auth/react";
+
+import type { JSX } from "react";
 
 /**
  * Tears down all session state for this browser: clears the active-tenant

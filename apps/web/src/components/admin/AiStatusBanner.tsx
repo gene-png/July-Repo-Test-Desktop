@@ -1,6 +1,7 @@
 "use client";
-
 import * as React from "react";
+
+import type { JSX } from "react";
 
 interface AiStatus {
   mode: string;

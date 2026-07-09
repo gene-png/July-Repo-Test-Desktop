@@ -12,7 +12,7 @@
  * Hidden for client-role users (their tenant is server-pinned).
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type JSX } from "react";
 import { useRouter } from "next/navigation";
 
 interface ClientSummary {

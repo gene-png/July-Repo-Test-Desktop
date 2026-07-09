@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import { cn, StatusPill } from "@shield/design-system";
@@ -12,6 +11,8 @@ import type {
 } from "@/lib/tech_debt/types";
 
 import { inputClasses, selectClasses } from "../intake/Field";
+
+import type { JSX } from "react";
 
 export interface EditableCapabilityTableProps {
   items: CapabilityItem[];

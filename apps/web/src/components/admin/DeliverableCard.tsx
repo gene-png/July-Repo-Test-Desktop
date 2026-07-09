@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -16,6 +15,8 @@ import {
   TechDebtProxyError,
 } from "@/lib/tech_debt/client";
 import type { CapabilityListStatus, Deliverable } from "@/lib/tech_debt/types";
+
+import type { JSX } from "react";
 
 export interface DeliverableCardProps {
   serviceId: string;

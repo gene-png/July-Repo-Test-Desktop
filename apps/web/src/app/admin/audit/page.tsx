@@ -3,6 +3,8 @@ import type { Metadata } from "next";
 import { AuditLogView } from "@/components/admin/AuditLogView";
 import { Breadcrumbs } from "@/components/site/Breadcrumbs";
 
+import type { JSX } from "react";
+
 export const metadata: Metadata = { title: "Audit log" };
 
 export default function AuditLogPage(): JSX.Element {

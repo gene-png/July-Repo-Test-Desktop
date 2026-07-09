@@ -37,8 +37,9 @@ function fail(err: unknown): NextResponse {
 
 export async function GET(
   _request: Request,
-  { params }: { params: { id: string } },
+  props: { params: Promise<{ id: string }> },
 ): Promise<NextResponse> {
+  const params = await props.params;
   const token = await bearer();
   if (!token) return unauthorized();
   try {
@@ -53,8 +54,9 @@ export async function GET(
 
 export async function POST(
   request: Request,
-  { params }: { params: { id: string } },
+  props: { params: Promise<{ id: string }> },
 ): Promise<NextResponse> {
+  const params = await props.params;
   const token = await bearer();
   if (!token) return unauthorized();
   let body: Record<string, unknown> | undefined;

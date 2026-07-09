@@ -8,6 +8,8 @@ import { PublicHeader } from "@/components/site/PublicHeader";
 import { SkipToContent } from "@/components/site/SkipToContent";
 import { authOptions } from "@/lib/auth/options";
 
+import type { JSX } from "react";
+
 export const metadata: Metadata = {
   title: "My assessments",
 };

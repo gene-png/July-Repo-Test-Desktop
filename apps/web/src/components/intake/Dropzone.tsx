@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import { cn, EmptyState } from "@shield/design-system";
@@ -9,6 +8,8 @@ import {
   ArtifactUploadError,
   uploadArtifact,
 } from "@/lib/intake/artifacts";
+
+import type { JSX } from "react";
 
 export interface DropzoneProps {
   /** Called after each successful upload with the API's artifact row. */

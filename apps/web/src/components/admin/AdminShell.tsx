@@ -1,11 +1,12 @@
 "use client";
-
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { ClientSwitcher } from "@/components/site/ClientSwitcher";
 import { SignOutButton } from "@/components/site/SignOutButton";
 import { SkipToContent } from "@/components/site/SkipToContent";
+
+import type { JSX } from "react";
 
 /**
  * Admin shell (Navigation_Spec §2): a persistent left sidebar so an admin can

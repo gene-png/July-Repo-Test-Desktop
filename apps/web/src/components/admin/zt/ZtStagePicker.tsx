@@ -1,8 +1,9 @@
 "use client";
-
 import * as React from "react";
 
 import type { CatalogStage } from "@/lib/zt/types";
+
+import type { JSX } from "react";
 
 export interface ZtStagePickerProps {
   value: number | null;

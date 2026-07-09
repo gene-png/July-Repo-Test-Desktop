@@ -2,6 +2,8 @@ import * as React from "react";
 
 import { cn } from "../utils/cn";
 
+import type { JSX } from "react";
+
 export interface DataTableColumn<Row> {
   /** Column key - must be unique within the table. */
   key: string;

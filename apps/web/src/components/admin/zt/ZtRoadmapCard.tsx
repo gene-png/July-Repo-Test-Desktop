@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -11,6 +10,8 @@ import {
 } from "@shield/design-system";
 
 import type { GapAnalysis, RoadmapEntry } from "@/lib/zt/types";
+
+import type { JSX } from "react";
 
 export interface ZtRoadmapCardProps {
   analysis: GapAnalysis | null;

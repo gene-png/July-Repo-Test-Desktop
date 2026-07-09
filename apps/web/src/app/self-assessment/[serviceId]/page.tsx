@@ -12,6 +12,8 @@ import { PublicFooter } from "@/components/site/PublicFooter";
 import { PublicHeader } from "@/components/site/PublicHeader";
 import { authOptions } from "@/lib/auth/options";
 
+import type { JSX } from "react";
+
 export const metadata: Metadata = { title: "Self-assessment" };
 
 const COPY: Record<string, { title: string; blurb: string }> = {
@@ -32,13 +34,12 @@ const COPY: Record<string, { title: string; blurb: string }> = {
   },
 };
 
-export default async function SelfAssessmentPage({
-  params,
-  searchParams,
-}: {
-  params: { serviceId: string };
-  searchParams: { type?: string };
+export default async function SelfAssessmentPage(props: {
+  params: Promise<{ serviceId: string }>;
+  searchParams: Promise<{ type?: string }>;
 }): Promise<JSX.Element> {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const session = await getServerSession(authOptions);
   const type = searchParams.type ?? "";
   if (!session) {

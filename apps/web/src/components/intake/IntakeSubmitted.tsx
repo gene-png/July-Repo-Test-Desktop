@@ -1,5 +1,4 @@
 "use client";
-
 import Link from "next/link";
 
 import {
@@ -15,6 +14,8 @@ import {
   type IntakeStateResponse,
   type ServiceType,
 } from "@/lib/intake/types";
+
+import type { JSX } from "react";
 
 const SELF_ASSESSMENT_TYPES: ServiceType[] = [
   "nist_csf",

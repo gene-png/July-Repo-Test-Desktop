@@ -1,8 +1,9 @@
 "use client";
-
 import * as React from "react";
 
 import { cn } from "../utils/cn";
+
+import type { JSX } from "react";
 
 export interface SlideOverProps {
   open: boolean;

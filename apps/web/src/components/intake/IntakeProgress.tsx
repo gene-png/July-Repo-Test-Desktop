@@ -2,6 +2,8 @@ import { cn } from "@shield/design-system";
 
 import { WIZARD_STEPS, type WizardStepKey } from "@/lib/intake/types";
 
+import type { JSX } from "react";
+
 export interface IntakeProgressProps {
   currentStep: WizardStepKey;
   completed: Set<WizardStepKey>;

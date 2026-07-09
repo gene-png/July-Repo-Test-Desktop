@@ -1,10 +1,11 @@
 "use client";
-
 import { Field, inputClasses, selectClasses } from "../Field";
 import type {
   ClientProfilePatch,
   IntakeStateResponse,
 } from "@/lib/intake/types";
+
+import type { JSX } from "react";
 
 export interface Step2OrganizationProps {
   state: IntakeStateResponse;

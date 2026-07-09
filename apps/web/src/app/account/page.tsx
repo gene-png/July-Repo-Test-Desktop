@@ -9,6 +9,8 @@ import { SignOutButton } from "@/components/site/SignOutButton";
 import { SkipToContent } from "@/components/site/SkipToContent";
 import { authOptions } from "@/lib/auth/options";
 
+import type { JSX } from "react";
+
 export const metadata: Metadata = { title: "Account" };
 
 function Row({ label, value }: { label: string; value: string }): JSX.Element {

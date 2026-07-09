@@ -2,6 +2,8 @@ import * as React from "react";
 
 import { cn } from "@shield/design-system";
 
+import type { JSX } from "react";
+
 export interface FieldProps {
   id: string;
   label: string;
@@ -34,11 +36,14 @@ export function Field({
           </span>
         ) : null}
       </label>
-      {React.cloneElement(children as React.ReactElement, {
-        "aria-describedby":
-          [hintId, errorId].filter(Boolean).join(" ") || undefined,
-        "aria-invalid": error ? "true" : undefined,
-      })}
+      {React.cloneElement(
+        children as React.ReactElement<Record<string, unknown>>,
+        {
+          "aria-describedby":
+            [hintId, errorId].filter(Boolean).join(" ") || undefined,
+          "aria-invalid": error ? "true" : undefined,
+        },
+      )}
       {hint ? (
         <p id={hintId} className="text-xs text-ink-tertiary">
           {hint}

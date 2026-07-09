@@ -5,6 +5,8 @@ import { PublicFooter } from "@/components/site/PublicFooter";
 import { PublicHeader } from "@/components/site/PublicHeader";
 import { SkipToContent } from "@/components/site/SkipToContent";
 
+import type { JSX } from "react";
+
 export const metadata: Metadata = { title: "Messages" };
 
 export default function MessagesPage(): JSX.Element {

@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import type { JSX } from "react";
+
 export function PublicFooter(): JSX.Element {
   return (
     <footer className="border-t border-border-subtle bg-surface-card">

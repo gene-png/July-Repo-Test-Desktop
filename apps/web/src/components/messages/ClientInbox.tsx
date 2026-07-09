@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 import Link from "next/link";
 
@@ -11,6 +10,8 @@ import {
   fetchInbox,
   type InboxThread,
 } from "@/lib/messages/client";
+
+import type { JSX } from "react";
 
 const SELF_ASSESSMENT_TYPES: ReadonlyArray<string> = [
   "nist_csf",

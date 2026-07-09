@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -15,6 +14,8 @@ import {
   type IntakeStateResponse,
   type ServiceType,
 } from "@/lib/intake/types";
+
+import type { JSX } from "react";
 
 export interface Step1ServicesProps {
   state: IntakeStateResponse;

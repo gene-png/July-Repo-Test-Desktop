@@ -1,5 +1,4 @@
 "use client";
-
 import {
   Card,
   CardBody,
@@ -12,6 +11,8 @@ import {
 } from "@shield/design-system";
 
 import type { OverlapAnalysis, OverlapBucket } from "@/lib/tech_debt/types";
+
+import type { JSX } from "react";
 
 export interface OverlapDashboardProps {
   analysis: OverlapAnalysis | null;

@@ -5,6 +5,8 @@ import { authOptions } from "@/lib/auth/options";
 import { ClientSwitcher } from "@/components/site/ClientSwitcher";
 import { SignOutButton } from "@/components/site/SignOutButton";
 
+import type { JSX } from "react";
+
 export async function PublicHeader(): Promise<JSX.Element> {
   const session = await getServerSession(authOptions);
   const role = session?.role;

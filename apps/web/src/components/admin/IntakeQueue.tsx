@@ -1,5 +1,4 @@
 "use client";
-
 import Link from "next/link";
 import * as React from "react";
 
@@ -24,6 +23,8 @@ import {
   SERVICE_LABELS,
   ZT_TARGET_STAGES,
 } from "@/lib/intake/types";
+
+import type { JSX } from "react";
 
 type ServiceRequestRow = AdminIntakeQueueResponse["service_requests"][number];
 

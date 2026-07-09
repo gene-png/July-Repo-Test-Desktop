@@ -38,11 +38,14 @@ async function bearerOrUnauthorized(): Promise<string | NextResponse> {
  * hit the backend's `current_client` guard and 400. Don't set Content-Type:
  * `fetch` derives the multipart boundary from the FormData body.
  */
-function upstreamHeaders(bearer: string): Record<string, string> {
+async function upstreamHeaders(
+  bearer: string,
+): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${bearer}`,
   };
-  const activeClient = cookies().get(ACTIVE_CLIENT_COOKIE)?.value;
+  const cookieStore = await cookies();
+  const activeClient = cookieStore.get(ACTIVE_CLIENT_COOKIE)?.value;
   if (activeClient) {
     headers["X-Client-Id"] = activeClient;
   }
@@ -82,7 +85,7 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   const upstream = await fetch(`${BASE_URL}/artifacts`, {
     method: "POST",
-    headers: upstreamHeaders(bearer),
+    headers: await upstreamHeaders(bearer),
     body: form,
   });
   const body = await upstream.text();
@@ -106,7 +109,7 @@ export async function GET(): Promise<NextResponse> {
   const bearer = await bearerOrUnauthorized();
   if (bearer instanceof NextResponse) return bearer;
   const upstream = await fetch(`${BASE_URL}/artifacts`, {
-    headers: upstreamHeaders(bearer),
+    headers: await upstreamHeaders(bearer),
     cache: "no-store",
   });
   const body = await upstream.text();

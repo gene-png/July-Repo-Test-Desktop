@@ -1,7 +1,8 @@
 "use client";
-
 import { Field, inputClasses } from "../Field";
 import type { IntakePatchRequest } from "@/lib/intake/types";
+
+import type { JSX } from "react";
 
 export interface Step3ContactProps {
   defaults: {

@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 import Link from "next/link";
 
@@ -14,6 +13,8 @@ import {
   MessagesProxyError,
   type InboxThread,
 } from "@/lib/messages/client";
+
+import type { JSX } from "react";
 
 /** Empty state prompting an admin to choose the active client. */
 function PickClientEmptyState({

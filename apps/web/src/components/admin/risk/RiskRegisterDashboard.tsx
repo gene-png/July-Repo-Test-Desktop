@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -44,6 +43,8 @@ import type {
   RiskGateSource,
   RiskRegister,
 } from "@/lib/risk/types";
+
+import type { JSX } from "react";
 
 const RECOMMENDED_ACTIONS = [
   "remediate",

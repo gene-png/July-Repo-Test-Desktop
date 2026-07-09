@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -13,6 +12,8 @@ import {
 } from "@shield/design-system";
 
 import { type ArtifactSummary, listArtifacts } from "@/lib/intake/artifacts";
+
+import type { JSX } from "react";
 
 const SPREADSHEET_MIME = new Set([
   "text/csv",

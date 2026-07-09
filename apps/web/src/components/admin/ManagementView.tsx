@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import { Card, CardBody, CardHeader, CardTitle } from "@shield/design-system";
@@ -13,6 +12,8 @@ import {
   type ClientSummary,
   type DomainRow,
 } from "@/lib/admin/client";
+
+import type { JSX } from "react";
 
 export function ManagementView(): JSX.Element {
   const [clients, setClients] = React.useState<ClientSummary[] | null>(null);

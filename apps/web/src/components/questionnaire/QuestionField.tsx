@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import { cn } from "@shield/design-system";
@@ -12,6 +11,8 @@ import {
 } from "../intake/Field";
 
 import type { Question, ResponseValue } from "./types";
+
+import type { JSX } from "react";
 
 export interface QuestionFieldProps {
   question: Question;

@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -29,6 +28,8 @@ import type {
   EnterpriseProfile,
   EnterpriseSubcategory,
 } from "@/lib/csf/types";
+
+import type { JSX } from "react";
 
 export interface CsfPlaybookPanelProps {
   serviceId: string;

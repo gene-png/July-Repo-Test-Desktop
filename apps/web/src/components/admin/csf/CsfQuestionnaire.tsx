@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import type {
@@ -11,6 +10,8 @@ import type {
 } from "@/lib/csf/types";
 
 import { TierPicker } from "./TierPicker";
+
+import type { JSX } from "react";
 
 export interface CsfQuestionnaireProps {
   catalog: CsfCatalog;

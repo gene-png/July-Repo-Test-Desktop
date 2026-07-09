@@ -1,6 +1,7 @@
 "use client";
-
 import type { CoverageStatus } from "@/lib/attack/types";
+
+import type { JSX } from "react";
 
 const TONE: Record<CoverageStatus, string> = {
   covered:

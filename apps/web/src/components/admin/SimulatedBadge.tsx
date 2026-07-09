@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 /**
  * Small inline "simulated" pill shown next to an AI result when the run used
  * deterministic demo fixtures (response mode === "fixture") rather than a live

@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 import Link from "next/link";
 
@@ -14,6 +13,8 @@ import {
 import { MessageThread } from "@/components/messages/MessageThread";
 import { fetchAssessments } from "@/lib/intake/client";
 import { SERVICE_LABELS, type AssessmentResponse } from "@/lib/intake/types";
+
+import type { JSX } from "react";
 
 function fmtTime(value: string | null): string {
   if (!value) return "";

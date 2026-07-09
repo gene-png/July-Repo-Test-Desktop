@@ -5,6 +5,8 @@ import {
   CardTitle,
 } from "@shield/design-system";
 
+import type { JSX } from "react";
+
 const SERVICES: { title: string; description: string }[] = [
   {
     title: "Technical Debt Review",

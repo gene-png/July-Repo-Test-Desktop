@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -42,6 +41,8 @@ import { CsfGapList } from "./CsfGapList";
 import { CsfPlaybookPanel } from "./CsfPlaybookPanel";
 import { CsfQuestionnaire } from "./CsfQuestionnaire";
 import { CsfScoreCard } from "./CsfScoreCard";
+
+import type { JSX } from "react";
 
 export interface CsfWorkspaceProps {
   serviceId: string;

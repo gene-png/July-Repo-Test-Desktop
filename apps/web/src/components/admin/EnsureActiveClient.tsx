@@ -1,6 +1,7 @@
 "use client";
-
 import * as React from "react";
+
+import type { JSX } from "react";
 
 /**
  * Aligns the active-client cookie to a workspace's owning tenant before its

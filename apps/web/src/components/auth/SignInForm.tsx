@@ -1,8 +1,9 @@
 "use client";
-
 import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import * as React from "react";
+
+import type { JSX } from "react";
 
 export function SignInForm(): JSX.Element {
   const searchParams = useSearchParams();

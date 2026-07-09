@@ -58,7 +58,7 @@ export async function apiFetch<T>(
     activeClient = opts.clientId || undefined;
   } else {
     try {
-      activeClient = cookies().get(ACTIVE_CLIENT_COOKIE)?.value;
+      activeClient = (await cookies()).get(ACTIVE_CLIENT_COOKIE)?.value;
     } catch {
       // cookies() throws if called outside a request scope - safe to ignore.
       activeClient = undefined;

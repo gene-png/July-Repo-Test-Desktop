@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -42,6 +41,8 @@ import { AttackDeliverableCard } from "./AttackDeliverableCard";
 import { AttackHeatmapCard } from "./AttackHeatmapCard";
 import { AttackMatrix } from "./AttackMatrix";
 import { AttackTechniquePanel } from "./AttackTechniquePanel";
+
+import type { JSX } from "react";
 
 export interface AttackWorkspaceProps {
   serviceId: string;

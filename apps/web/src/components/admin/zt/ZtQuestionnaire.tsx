@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import type {
@@ -12,6 +11,8 @@ import type {
 import { ZtMaturityReference } from "@/components/zt/ZtMaturityReference";
 
 import { ZtStagePicker } from "./ZtStagePicker";
+
+import type { JSX } from "react";
 
 export interface ZtQuestionnaireProps {
   catalog: ZtCatalog;

@@ -1,5 +1,4 @@
 "use client";
-
 import {
   Card,
   CardBody,
@@ -8,6 +7,8 @@ import {
   CardTitle,
   StatusPill,
 } from "@shield/design-system";
+
+import type { JSX } from "react";
 
 /**
  * Explains the three dispositions a consultant assigns to each capability.

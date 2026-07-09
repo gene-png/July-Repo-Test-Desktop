@@ -1,5 +1,4 @@
 "use client";
-
 import Link from "next/link";
 import * as React from "react";
 
@@ -16,6 +15,8 @@ import { listClients, listServices } from "@/lib/admin/client";
 import { workspaceHref } from "@/lib/admin/types";
 import type { AdminServiceRow } from "@/lib/admin/types";
 import { SERVICE_LABELS } from "@/lib/intake/types";
+
+import type { JSX } from "react";
 
 /** Statuses that count as "active work" — a live engagement being worked. */
 const ACTIVE_STATUSES = new Set(["in_progress", "review"]);

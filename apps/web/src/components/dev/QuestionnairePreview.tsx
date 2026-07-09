@@ -1,5 +1,4 @@
 "use client";
-
 import Link from "next/link";
 import * as React from "react";
 
@@ -9,6 +8,8 @@ import type {
   Responses,
   ResponseValue,
 } from "@/components/questionnaire/types";
+
+import type { JSX } from "react";
 
 /**
  * Dev-only preview that exercises the QuestionnaireRenderer end-to-end with

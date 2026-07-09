@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -25,6 +24,8 @@ import type {
   CsfAssessment,
   CsfCatalog,
 } from "@/lib/csf/types";
+
+import type { JSX } from "react";
 
 const PROFILE_RANK: Record<string, number> = { LOW: 0, MOD: 1, HIGH: 2 };
 const PROFILE_LABEL: Record<string, string> = {

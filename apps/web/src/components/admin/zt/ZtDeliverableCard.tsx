@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -13,6 +12,8 @@ import {
 
 import { finalizeZtDeliverable, ZtProxyError } from "@/lib/zt/client";
 import type { ZtAssessmentStatus, ZtDeliverable } from "@/lib/zt/types";
+
+import type { JSX } from "react";
 
 export interface ZtDeliverableCardProps {
   serviceId: string;

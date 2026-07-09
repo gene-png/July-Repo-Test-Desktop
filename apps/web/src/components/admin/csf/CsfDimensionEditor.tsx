@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import { Card, CardBody, CardHeader, CardTitle } from "@shield/design-system";
@@ -14,6 +13,8 @@ import type {
   CsfDimensionScorePatch,
   CsfProfile,
 } from "@/lib/csf/types";
+
+import type { JSX } from "react";
 
 export interface CsfDimensionEditorProps {
   serviceId: string;

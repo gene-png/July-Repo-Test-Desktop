@@ -2,8 +2,9 @@ import { proxyJson } from "../../../_proxy";
 
 export async function GET(
   _request: Request,
-  { params }: { params: { id: string } },
+  props: { params: Promise<{ id: string }> },
 ) {
+  const params = await props.params;
   return proxyJson(`/csf/services/${params.id}/self-assessment`, {
     method: "GET",
   });

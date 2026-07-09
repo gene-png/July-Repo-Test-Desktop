@@ -3,6 +3,8 @@ import type { Metadata } from "next";
 import { EngagementsView } from "@/components/admin/EngagementsView";
 import { Breadcrumbs } from "@/components/site/Breadcrumbs";
 
+import type { JSX } from "react";
+
 export const metadata: Metadata = { title: "Engagements" };
 
 export default function EngagementsPage(): JSX.Element {

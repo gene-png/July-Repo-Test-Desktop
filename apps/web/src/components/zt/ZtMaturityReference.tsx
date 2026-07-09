@@ -1,6 +1,7 @@
 "use client";
-
 import type { ZtFramework } from "@/lib/zt/types";
+
+import type { JSX } from "react";
 
 /**
  * Framework-appropriate link to the authoritative source that defines the

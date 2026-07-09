@@ -4,6 +4,8 @@ import { notFound } from "next/navigation";
 import { QuestionnairePreview } from "@/components/dev/QuestionnairePreview";
 import { authOptions } from "@/lib/auth/options";
 
+import type { JSX } from "react";
+
 /**
  * D-4: the renderer preview is an internal dev tool. Gate it to admins with a
  * server component wrapper — non-admins (and anonymous visitors) get a 404

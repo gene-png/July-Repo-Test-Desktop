@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import { Card, CardBody, EmptyState } from "@shield/design-system";
@@ -11,6 +10,8 @@ import {
   type ClientSummary,
 } from "@/lib/admin/client";
 import type { AdminAuditListResponse, AuditFilters } from "@/lib/admin/types";
+
+import type { JSX } from "react";
 
 const PAGE_SIZE = 50;
 

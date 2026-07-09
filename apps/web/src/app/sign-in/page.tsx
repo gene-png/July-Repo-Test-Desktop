@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Suspense } from "react";
+import { Suspense, type JSX } from "react";
 
 import { SignInForm } from "@/components/auth/SignInForm";
 import { PublicHeader } from "@/components/site/PublicHeader";

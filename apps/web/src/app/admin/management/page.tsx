@@ -3,6 +3,8 @@ import type { Metadata } from "next";
 import { ManagementView } from "@/components/admin/ManagementView";
 import { Breadcrumbs } from "@/components/site/Breadcrumbs";
 
+import type { JSX } from "react";
+
 export const metadata: Metadata = { title: "Management" };
 
 export default function ManagementPage(): JSX.Element {

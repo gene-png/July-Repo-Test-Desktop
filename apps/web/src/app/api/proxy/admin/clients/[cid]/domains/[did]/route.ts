@@ -11,8 +11,9 @@ import { authOptions } from "@/lib/auth/options";
 
 export async function DELETE(
   _request: Request,
-  { params }: { params: { cid: string; did: string } },
+  props: { params: Promise<{ cid: string; did: string }> },
 ): Promise<NextResponse> {
+  const params = await props.params;
   const session = await getServerSession(authOptions);
   const token = session?.accessToken;
   if (!token) {

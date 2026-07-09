@@ -8,13 +8,14 @@ import { PublicHeader } from "@/components/site/PublicHeader";
 import { SkipToContent } from "@/components/site/SkipToContent";
 import { authOptions } from "@/lib/auth/options";
 
+import type { JSX } from "react";
+
 export const metadata: Metadata = { title: "Service" };
 
-export default async function ClientServicePage({
-  params,
-}: {
-  params: { serviceId: string };
+export default async function ClientServicePage(props: {
+  params: Promise<{ serviceId: string }>;
 }): Promise<JSX.Element> {
+  const params = await props.params;
   const session = await getServerSession(authOptions);
   if (!session) {
     const cb = encodeURIComponent(`/client-services/${params.serviceId}`);

@@ -1,5 +1,4 @@
 "use client";
-
 import {
   Card,
   CardBody,
@@ -11,6 +10,8 @@ import {
 } from "@shield/design-system";
 
 import type { ZtScoreSummary } from "@/lib/zt/types";
+
+import type { JSX } from "react";
 
 export interface ZtScoreCardProps {
   score: ZtScoreSummary | null;

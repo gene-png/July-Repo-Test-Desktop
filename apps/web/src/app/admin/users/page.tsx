@@ -3,6 +3,8 @@ import type { Metadata } from "next";
 import { UsersView } from "@/components/admin/UsersView";
 import { Breadcrumbs } from "@/components/site/Breadcrumbs";
 
+import type { JSX } from "react";
+
 export const metadata: Metadata = { title: "Users" };
 
 export default function UsersPage(): JSX.Element {

@@ -1,5 +1,4 @@
 "use client";
-
 import {
   Card,
   CardBody,
@@ -10,6 +9,8 @@ import {
 } from "@shield/design-system";
 
 import type { ConsolidationPlanSummary } from "@/lib/tech_debt/types";
+
+import type { JSX } from "react";
 
 export interface ConsolidationPlanCardProps {
   summary: ConsolidationPlanSummary | null;

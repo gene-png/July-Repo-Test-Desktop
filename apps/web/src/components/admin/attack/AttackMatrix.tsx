@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import type {
@@ -10,6 +9,8 @@ import type {
 } from "@/lib/attack/types";
 
 import { StatusBadge } from "./StatusBadge";
+
+import type { JSX } from "react";
 
 export interface AttackMatrixProps {
   catalog: AttackCatalog;
