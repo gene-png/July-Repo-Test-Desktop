@@ -100,6 +100,8 @@ class AttackAssessmentResponse(BaseModel):
     approved_by: uuid.UUID | None
     documents_stale: bool = False
     coverage: list[AttackCoverageResponse]
+    # E-4: persisted mitre_map AI narrative output (executive summary + blind spots).
+    ai_summaries: dict | None = None
 
 
 class CoverageChange(BaseModel):
@@ -120,6 +122,11 @@ class AttackRunAiResponse(BaseModel):
     # Batches (of the 600+ techniques) the AI provider couldn't reach this run.
     # >0 means partial coverage — re-run to fill the rest.
     failed_batches: int = 0
+    # Non-fatal advisories about this run (G-2). E.g. when the client has no
+    # approved capability list, the mapping can cite no tools.
+    warnings: list[str] = Field(default_factory=list)
+    # E-5: "fixture" (simulated) or "live" so the UI can badge simulated output.
+    mode: str = "fixture"
 
 
 class AttackCoveragePatch(BaseModel):

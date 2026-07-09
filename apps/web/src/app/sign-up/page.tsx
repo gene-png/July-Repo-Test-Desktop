@@ -4,6 +4,8 @@ import Link from "next/link";
 import { SignUpForm } from "@/components/auth/SignUpForm";
 import { PublicHeader } from "@/components/site/PublicHeader";
 
+import type { JSX } from "react";
+
 export const metadata: Metadata = {
   title: "Create your SHIELD account",
 };

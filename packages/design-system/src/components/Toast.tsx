@@ -1,9 +1,10 @@
 "use client";
-
 import * as React from "react";
 
 import type { StatusTone } from "./StatusPill";
 import { cn } from "../utils/cn";
+
+import type { JSX } from "react";
 
 export interface ToastInput {
   title: string;

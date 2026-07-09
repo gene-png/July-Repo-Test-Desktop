@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -27,6 +26,8 @@ import type {
   ZtCatalog,
   ZtFramework,
 } from "@/lib/zt/types";
+
+import type { JSX } from "react";
 
 export function ZtSelfAssessment({
   serviceId,
@@ -153,9 +154,10 @@ export function ZtSelfAssessment({
       <p className="text-sm text-ink-tertiary">Loading your self-assessment…</p>
     );
   }
-  if (submitted) {
-    return <SelfAssessmentSubmitted />;
-  }
+
+  // Post-submit: keep answers visible but read-only (inputs disabled), with a
+  // submission confirmation on top and the submit controls hidden.
+  const readOnly = submitted;
 
   const targetStages = catalog.stages.filter((s) => s.stage >= 2);
   const pillars = catalog.pillars;
@@ -167,6 +169,7 @@ export function ZtSelfAssessment({
 
   return (
     <div className="flex flex-col gap-6">
+      {readOnly ? <SelfAssessmentSubmitted /> : null}
       <Card>
         <CardHeader>
           <CardTitle>1. Your maturity target</CardTitle>
@@ -184,12 +187,14 @@ export function ZtSelfAssessment({
                 key={s.stage}
                 type="button"
                 onClick={() => setTarget(s.stage)}
+                disabled={readOnly}
                 aria-pressed={target === s.stage}
                 className={cn(
                   "max-w-xs rounded-md border px-4 py-2 text-left text-sm transition-colors",
                   target === s.stage
                     ? "border-brand-500 bg-brand-50 text-ink-primary"
                     : "border-border bg-surface-card text-ink-secondary hover:border-border-strong",
+                  readOnly ? "cursor-not-allowed opacity-60" : "",
                 )}
               >
                 <span className="block font-semibold">
@@ -338,6 +343,7 @@ export function ZtSelfAssessment({
                         <ZtStagePicker
                           value={ans.maturity_stage}
                           stages={catalog.stages}
+                          disabled={readOnly}
                           ariaLabel={`Maturity stage for ${cap.code}`}
                           onChange={(next) => {
                             void onAnswerUpdate(ans.id, {
@@ -360,6 +366,7 @@ export function ZtSelfAssessment({
                         <textarea
                           aria-label={`Notes for ${cap.code}`}
                           defaultValue={ans.notes ?? ""}
+                          disabled={readOnly}
                           rows={3}
                           onBlur={(e) => {
                             const v = e.currentTarget.value.trim();
@@ -420,35 +427,37 @@ export function ZtSelfAssessment({
         </div>
       ) : null}
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-ink-tertiary">
-          {everyPillarStarted ? (
-            "All pillars have answers — you can submit for review."
-          ) : (
-            <>
-              Add at least one answer to every pillar before submitting. Still
-              needs attention:{" "}
-              <span className="font-medium text-ink-secondary">
-                {incomplete.map((s) => s.code).join(", ")}
-              </span>
-              .
-            </>
-          )}
-        </p>
-        <button
-          type="button"
-          onClick={() => void onSubmit()}
-          disabled={submitting || !everyPillarStarted}
-          title={
-            everyPillarStarted
-              ? undefined
-              : "Answer at least one capability in every pillar first."
-          }
-          className="rounded-md bg-brand-500 px-5 py-2.5 text-sm font-semibold text-ink-on-accent hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {submitting ? "Submitting…" : "Submit for review"}
-        </button>
-      </div>
+      {readOnly ? null : (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-ink-tertiary">
+            {everyPillarStarted ? (
+              "All pillars have answers — you can submit for review."
+            ) : (
+              <>
+                Add at least one answer to every pillar before submitting. Still
+                needs attention:{" "}
+                <span className="font-medium text-ink-secondary">
+                  {incomplete.map((s) => s.code).join(", ")}
+                </span>
+                .
+              </>
+            )}
+          </p>
+          <button
+            type="button"
+            onClick={() => void onSubmit()}
+            disabled={submitting || !everyPillarStarted}
+            title={
+              everyPillarStarted
+                ? undefined
+                : "Answer at least one capability in every pillar first."
+            }
+            className="rounded-md bg-brand-500 px-5 py-2.5 text-sm font-semibold text-ink-on-accent hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {submitting ? "Submitting…" : "Submit for review"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -19,6 +18,8 @@ import type {
   AttackAssessmentStatus,
   AttackDeliverable,
 } from "@/lib/attack/types";
+
+import type { JSX } from "react";
 
 export interface AttackDeliverableCardProps {
   serviceId: string;

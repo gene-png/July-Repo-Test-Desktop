@@ -130,6 +130,27 @@ def test_upload_rejects_unknown_mime(app_client) -> None:
 
 
 @pytest.mark.unit
+def test_upload_rejects_legacy_xls(app_client) -> None:
+    """C-2: legacy OLE2 .xls (openpyxl can't read it) is rejected up front
+    with an actionable 415 rather than being stored and 500-ing at extract."""
+    client, _, _ = app_client
+    bearer = _bearer(client)
+    r = client.post(
+        "/artifacts",
+        headers={"Authorization": f"Bearer {bearer}"},
+        files={
+            "file": (
+                "inventory.xls",
+                io.BytesIO(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"),  # OLE2 magic
+                "application/vnd.ms-excel",
+            )
+        },
+    )
+    assert r.status_code == 415, r.text
+    assert "Legacy .xls is not supported" in r.json()["error"]["message"]
+
+
+@pytest.mark.unit
 def test_upload_rejects_empty_file(app_client) -> None:
     client, _, _ = app_client
     bearer = _bearer(client)
@@ -169,12 +190,12 @@ def test_upload_sanitizes_filename(app_client) -> None:
 def test_list_artifacts_only_returns_own(app_client) -> None:
     client, _, _ = app_client
     bearer = _bearer(client)
-    payload = b"%PDF-1.7 fake pdf"
+    # Distinct bytes per file so the C-8 sha256 dedup doesn't collapse them.
     for name in ("a.pdf", "b.pdf"):
         r = client.post(
             "/artifacts",
             headers={"Authorization": f"Bearer {bearer}"},
-            files={"file": (name, io.BytesIO(payload), "application/pdf")},
+            files={"file": (name, io.BytesIO(b"%PDF-1.7 " + name.encode()), "application/pdf")},
         )
         assert r.status_code == 201
 
@@ -195,6 +216,88 @@ def test_get_artifact_returns_404_for_unknown_id(app_client) -> None:
         headers={"Authorization": f"Bearer {bearer}"},
     )
     assert r.status_code == 404
+
+
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@pytest.mark.unit
+def test_upload_rejects_spoofed_mime(app_client) -> None:
+    """C-6: plain text claiming to be an .xlsx fails the magic-byte sniff."""
+    client, _, _ = app_client
+    bearer = _bearer(client)
+    r = client.post(
+        "/artifacts",
+        headers={"Authorization": f"Bearer {bearer}"},
+        files={"file": ("inv.xlsx", io.BytesIO(b"just plain text, not a workbook"), _XLSX_MIME)},
+    )
+    assert r.status_code == 415, r.text
+    assert "does not match its declared type" in r.json()["error"]["message"]
+
+
+@pytest.mark.unit
+def test_upload_rejects_csv_with_nul_bytes(app_client) -> None:
+    """C-6: a NUL-laden binary claiming text/csv fails the text heuristic."""
+    client, _, _ = app_client
+    bearer = _bearer(client)
+    r = client.post(
+        "/artifacts",
+        headers={"Authorization": f"Bearer {bearer}"},
+        files={"file": ("inv.csv", io.BytesIO(b"a,b\n\x00\x01\x02binary"), "text/csv")},
+    )
+    assert r.status_code == 415, r.text
+
+
+@pytest.mark.unit
+def test_upload_413_when_content_length_exceeds_limit(app_client, monkeypatch) -> None:
+    """C-6: an oversized declared Content-Length is rejected before storage."""
+    import app.routes.artifacts as artifacts_mod
+
+    client, _, storage_root = app_client
+    bearer = _bearer(client)
+    # Shrink the cap so the (auto-computed) multipart Content-Length exceeds it.
+    monkeypatch.setattr(artifacts_mod, "MAX_UPLOAD_BYTES", 4)
+    r = client.post(
+        "/artifacts",
+        headers={"Authorization": f"Bearer {bearer}"},
+        files={
+            "file": (
+                "big.pdf",
+                io.BytesIO(b"%PDF-1.7 this is bigger than four bytes"),
+                "application/pdf",
+            )
+        },
+    )
+    assert r.status_code == 413, r.text
+    # Nothing was written to storage.
+    assert list(storage_root.rglob("big.pdf")) == []
+
+
+@pytest.mark.unit
+def test_upload_dedup_returns_existing_artifact(app_client) -> None:
+    """C-8: re-uploading identical bytes returns the first artifact (200)."""
+    client, _, _ = app_client
+    bearer = _bearer(client)
+    payload = b"%PDF-1.7 identical bytes for dedup"
+    first = client.post(
+        "/artifacts",
+        headers={"Authorization": f"Bearer {bearer}"},
+        files={"file": ("one.pdf", io.BytesIO(payload), "application/pdf")},
+    )
+    assert first.status_code == 201, first.text
+    assert first.json()["already_uploaded"] is False
+
+    second = client.post(
+        "/artifacts",
+        headers={"Authorization": f"Bearer {bearer}"},
+        files={"file": ("two.pdf", io.BytesIO(payload), "application/pdf")},
+    )
+    assert second.status_code == 200, second.text
+    body = second.json()
+    assert body["already_uploaded"] is True
+    assert body["id"] == first.json()["id"]
+    # The dedup returns the first row, so its original title is preserved.
+    assert body["title"] == "one.pdf"
 
 
 @pytest.mark.unit

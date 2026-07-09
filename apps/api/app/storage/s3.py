@@ -7,13 +7,23 @@ S3 don't pay the import cost.
 from __future__ import annotations
 
 from app.config import Settings
-from app.storage.base import StorageBackend, StoredObject, sha256_of
+from app.storage.base import StorageBackend, StorageUnavailableError, StoredObject, sha256_of
+
+# Bounded client budget so a wedged endpoint fails fast instead of hanging the
+# request thread (C-7). Kept as module constants rather than Settings fields to
+# avoid growing the config surface.
+_CONNECT_TIMEOUT_SECONDS = 5
+_READ_TIMEOUT_SECONDS = 30
+_MAX_ATTEMPTS = 2
+
+# boto error codes that mean "the object isn't there" (vs. an infra failure).
+_NOT_FOUND_CODES = {"NoSuchKey", "NoSuchBucket", "404"}
 
 
 class S3Storage(StorageBackend):
     def __init__(self, settings: Settings) -> None:
         import boto3
-        from botocore.client import Config
+        from botocore.config import Config
 
         self._bucket = settings.s3_bucket
         self._kms_key_id = settings.s3_kms_key_id
@@ -22,7 +32,12 @@ class S3Storage(StorageBackend):
             endpoint_url=settings.s3_endpoint_url or None,
             aws_access_key_id=settings.s3_access_key,
             aws_secret_access_key=settings.s3_secret_key,
-            config=Config(signature_version="s3v4"),
+            config=Config(
+                signature_version="s3v4",
+                connect_timeout=_CONNECT_TIMEOUT_SECONDS,
+                read_timeout=_READ_TIMEOUT_SECONDS,
+                retries={"max_attempts": _MAX_ATTEMPTS},
+            ),
         )
 
     def put(self, key: str, data: bytes, *, content_type: str) -> StoredObject:
@@ -41,10 +56,26 @@ class S3Storage(StorageBackend):
         return StoredObject(key=key, size_bytes=len(data), sha256=sha256_of(data))
 
     def get(self, key: str) -> bytes:
+        from botocore.exceptions import (
+            ClientError,
+            EndpointConnectionError,
+            NoCredentialsError,
+        )
+
         try:
             resp = self._client.get_object(Bucket=self._bucket, Key=key)
-        except Exception as exc:  # noqa: BLE001 - boto raises a family of errors
-            raise FileNotFoundError(key) from exc
+        except ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            if code in _NOT_FOUND_CODES or status == 404:
+                raise FileNotFoundError(key) from exc
+            # Auth / throttling / server errors are infra problems, not a
+            # missing object: surface as a retryable outage.
+            raise StorageUnavailableError(
+                f"S3 get_object failed for {key!r} ({code or status})"
+            ) from exc
+        except (EndpointConnectionError, NoCredentialsError) as exc:
+            raise StorageUnavailableError(f"S3 backend is unreachable for {key!r}: {exc}") from exc
         return resp["Body"].read()
 
     def exists(self, key: str) -> bool:

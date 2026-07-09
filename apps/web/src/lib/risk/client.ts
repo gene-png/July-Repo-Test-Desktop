@@ -1,6 +1,11 @@
 "use client";
 
-import type { RiskGate, RiskRegister } from "./types";
+import type {
+  RiskEntry,
+  RiskEntryPatch,
+  RiskGate,
+  RiskRegister,
+} from "./types";
 
 export class RiskProxyError extends Error {
   constructor(
@@ -13,13 +18,25 @@ export class RiskProxyError extends Error {
 
 async function jsonRequest<T>(
   url: string,
-  init: { method?: "GET" | "POST" } = {},
+  init: {
+    method?: "GET" | "POST" | "PATCH" | "DELETE";
+    body?: unknown;
+  } = {},
 ): Promise<T> {
   const res = await fetch(url, {
     method: init.method ?? "GET",
     cache: "no-store",
-    headers: { Accept: "application/json" },
+    headers: {
+      Accept: "application/json",
+      ...(init.body !== undefined
+        ? { "Content-Type": "application/json" }
+        : {}),
+    },
+    body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
   });
+  if (res.status === 204) {
+    return undefined as T;
+  }
   if (!res.ok) {
     let payload: unknown;
     try {
@@ -79,6 +96,29 @@ export async function exportRiskRegister(cid: string): Promise<RiskRegister> {
     `/api/proxy/risk/clients/${cid}/register/export`,
     { method: "POST" },
   );
+}
+
+export async function approveRiskRegister(cid: string): Promise<RiskRegister> {
+  return jsonRequest<RiskRegister>(
+    `/api/proxy/risk/clients/${cid}/register/approve`,
+    { method: "POST" },
+  );
+}
+
+export async function patchRiskEntry(
+  entryId: string,
+  patch: RiskEntryPatch,
+): Promise<RiskEntry> {
+  return jsonRequest<RiskEntry>(`/api/proxy/risk/entries/${entryId}`, {
+    method: "PATCH",
+    body: patch,
+  });
+}
+
+export async function deleteRiskEntry(entryId: string): Promise<void> {
+  await jsonRequest<void>(`/api/proxy/risk/entries/${entryId}`, {
+    method: "DELETE",
+  });
 }
 
 export function describeRiskError(err: unknown): string {

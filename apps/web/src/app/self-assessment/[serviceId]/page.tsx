@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { getServerSession } from "next-auth";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { Card, CardBody, CardHeader, CardTitle } from "@shield/design-system";
@@ -10,6 +11,8 @@ import { ZtSelfAssessment } from "@/components/self-assessment/ZtSelfAssessment"
 import { PublicFooter } from "@/components/site/PublicFooter";
 import { PublicHeader } from "@/components/site/PublicHeader";
 import { authOptions } from "@/lib/auth/options";
+
+import type { JSX } from "react";
 
 export const metadata: Metadata = { title: "Self-assessment" };
 
@@ -31,13 +34,12 @@ const COPY: Record<string, { title: string; blurb: string }> = {
   },
 };
 
-export default async function SelfAssessmentPage({
-  params,
-  searchParams,
-}: {
-  params: { serviceId: string };
-  searchParams: { type?: string };
+export default async function SelfAssessmentPage(props: {
+  params: Promise<{ serviceId: string }>;
+  searchParams: Promise<{ type?: string }>;
 }): Promise<JSX.Element> {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const session = await getServerSession(authOptions);
   const type = searchParams.type ?? "";
   if (!session) {
@@ -77,13 +79,21 @@ export default async function SelfAssessmentPage({
         ) : (
           <Card>
             <CardHeader>
-              <CardTitle>Open this from your intake confirmation</CardTitle>
+              <CardTitle>
+                We couldn&apos;t tell which assessment to load
+              </CardTitle>
             </CardHeader>
-            <CardBody>
+            <CardBody className="flex flex-col items-start gap-3">
               <p className="text-sm text-ink-secondary">
-                We couldn&apos;t tell which assessment to load. Head back to
-                your intake confirmation and pick a self-assessment to start.
+                This link is missing its assessment type. Open the assessment
+                again from your assessments list to start the self-assessment.
               </p>
+              <Link
+                href="/assessments"
+                className="inline-flex w-fit rounded-md bg-brand-500 px-4 py-2 text-sm font-semibold text-ink-on-accent hover:bg-brand-600"
+              >
+                Go to my assessments →
+              </Link>
             </CardBody>
           </Card>
         )}

@@ -1,6 +1,7 @@
 "use client";
-
 import * as React from "react";
+
+import type { JSX } from "react";
 
 interface AiStatus {
   mode: string;
@@ -34,16 +35,31 @@ export function AiStatusBanner(): JSX.Element | null {
     };
   }, []);
 
-  if (!status || status.ready) return null;
+  if (!status) return null;
+
+  const isFixture = status.mode === "fixture";
+  // Live + configured: nothing to warn about.
+  if (!isFixture && status.ready) return null;
 
   return (
     <div
       role="status"
       className="rounded-md border border-status-warning-border bg-status-warning-bg px-4 py-3 text-sm text-status-warning-fg"
     >
-      <span className="font-semibold">AI is not live.</span> {status.detail}{" "}
-      Extraction and other AI steps won&apos;t produce results until this is
-      configured.
+      {isFixture ? (
+        <>
+          <span className="font-semibold">AI suggestions are simulated</span>{" "}
+          (deterministic fixtures) for demo and testing; set{" "}
+          <code className="font-mono">SHIELD_LLM_MODE=live</code> for real
+          analysis.
+        </>
+      ) : (
+        <>
+          <span className="font-semibold">AI is not live.</span> {status.detail}{" "}
+          Extraction and other AI steps won&apos;t produce results until this is
+          configured.
+        </>
+      )}
     </div>
   );
 }

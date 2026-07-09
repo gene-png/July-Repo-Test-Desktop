@@ -57,6 +57,7 @@ def test_invoke_writes_llm_call_row_with_completed_status(db_factory) -> None:
 
     with db_factory() as db:
         admin = _new_admin(db)
+        db.commit()  # commit the admin so the fresh-session read below can resolve it
         response, row = client.invoke(
             db,
             purpose="extract.capabilities",
@@ -68,16 +69,22 @@ def test_invoke_writes_llm_call_row_with_completed_status(db_factory) -> None:
             },
             requested_by=admin.id,
         )
-        db.commit()
+        admin_id = admin.id
 
         assert response.content == "ok"
+        assert row.status == LLMCallStatus.COMPLETED
+
+    # E-2: the audit row is committed on an INDEPENDENT session, so a brand-new
+    # session (no shared transaction with the request session) sees it.
+    with db_factory() as fresh:
+        row = fresh.execute(select(LLMCall)).scalar_one()
         assert row.status == LLMCallStatus.COMPLETED
         assert row.input_tokens == 12
         assert row.output_tokens == 34
         assert row.purpose == "extract.capabilities"
         assert row.provider == "fixture"
         assert row.mode == LLMCallMode.FIXTURE
-        assert row.requested_by == admin.id
+        assert row.requested_by == admin_id
         # Redacted counts captured.
         assert row.redacted_counts is not None
         assert row.redacted_counts["email"] == 1
@@ -102,6 +109,7 @@ def test_invoke_records_failure_with_error_message(db_factory) -> None:
 
     with db_factory() as db:
         admin = _new_admin(db)
+        db.commit()
         with pytest.raises(RuntimeError, match="upstream down"):
             client.invoke(
                 db,
@@ -110,9 +118,12 @@ def test_invoke_records_failure_with_error_message(db_factory) -> None:
                 payload={"a": 1},
                 requested_by=admin.id,
             )
-        db.commit()
+        # E-2: even though the request transaction is rolled back (nothing
+        # committed here), the FAILED audit row was committed independently.
+        db.rollback()
 
-        row = db.execute(select(LLMCall)).scalar_one()
+    with db_factory() as fresh:
+        row = fresh.execute(select(LLMCall)).scalar_one()
         assert row.status == LLMCallStatus.FAILED
         assert "upstream down" in row.error_message
         # Duration was still recorded so debugging "slow failures" is possible.
@@ -133,6 +144,11 @@ def test_invoke_routes_redacted_payload_in_dict_keys_preserved(db_factory) -> No
     client = LLMClient(provider)
     with db_factory() as db:
         admin = _new_admin(db)
+        # E-2: the audit row commits on an independent connection; the request
+        # session must not hold an uncommitted write lock across that commit
+        # (SQLite is single-writer). Routes achieve this with db.close() before
+        # the provider call; here we simply commit the setup row first.
+        db.commit()
         client.invoke(
             db,
             purpose="extract.capabilities",
@@ -151,6 +167,7 @@ def test_fixture_provider_raises_when_purpose_unregistered(db_factory) -> None:
     client = LLMClient(provider)
     with db_factory() as db:
         admin = _new_admin(db)
+        db.commit()
         with pytest.raises(KeyError, match="No fixture registered"):
             client.invoke(
                 db,
@@ -173,6 +190,7 @@ def test_correlation_id_threaded_through_llm_call_row(db_factory) -> None:
     try:
         with db_factory() as db:
             admin = _new_admin(db)
+            db.commit()
             client.invoke(
                 db,
                 purpose="p",

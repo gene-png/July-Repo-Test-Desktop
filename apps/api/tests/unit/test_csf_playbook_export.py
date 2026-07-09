@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from app.csf.catalog import SUBCATEGORIES
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -65,21 +64,22 @@ def test_playbook_export_produces_downloadable_xlsx(app_client) -> None:
     svc_id = c.post("/csf/services", headers=h, json={"kind": "nist_csf", "title": "CSF"}).json()[
         "id"
     ]
-    c.post(f"/csf/services/{svc_id}/assessments", headers=h)
+    assess_id = c.post(f"/csf/services/{svc_id}/assessments", headers=h).json()["id"]
 
     # Locked before seeding.
     assert c.post(f"/csf/services/{svc_id}/playbook/export", headers=h).status_code == 409
 
-    c.post(f"/csf/services/{svc_id}/profiles/seed", headers=h, json={"tiers": ["high", "moderate"]})
-    # Give one subcategory some scores so the sheets have content.
-    code = SUBCATEGORIES[0].code
+    c.post(f"/csf/services/{svc_id}/profiles/seed", headers=h, json={"tiers": ["high"]})
+    # B-3 export gate: every in-scope row must be scored and the assessment
+    # approved before the playbook renders. Score every seeded row, then approve.
     rows = c.get(f"/csf/services/{svc_id}/profile/high", headers=h).json()["rows"]
-    sid = next(x["id"] for x in rows if x["subcategory_code"] == code)
-    c.patch(
-        f"/csf/dimension-scores/{sid}",
-        headers=h,
-        json={"governance": 2, "policy": 2, "has_evidence": True, "target_level": 4},
-    )
+    for row in rows:
+        c.patch(
+            f"/csf/dimension-scores/{row['id']}",
+            headers=h,
+            json={"governance": 2, "policy": 2, "target_level": 4},
+        )
+    c.post(f"/csf/assessments/{assess_id}/approve", headers=h)
 
     ex = c.post(f"/csf/services/{svc_id}/playbook/export", headers=h)
     assert ex.status_code == 200, ex.text

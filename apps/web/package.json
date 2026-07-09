@@ -6,30 +6,31 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@shield/design-system": "workspace:*",
     "next": "16.2.10",
-    "react": "18.3.1",
-    "react-dom": "18.3.1",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
     "next-auth": "4.24.14",
     "zod": "3.23.8",
     "clsx": "2.1.1",
-    "tailwind-merge": "3.6.0",
+    "tailwind-merge": "2.5.4",
     "class-variance-authority": "0.7.1",
-    "lucide-react": "1.23.0"
+    "lucide-react": "0.453.0"
   },
   "devDependencies": {
     "typescript": "5.6.3",
     "@types/node": "20.16.11",
     "@types/react": "19.2.17",
-    "@types/react-dom": "18.3.0",
+    "@types/react-dom": "19.2.3",
     "tailwindcss": "4.3.2",
+    "@tailwindcss/postcss": "4.3.2",
     "postcss": "8.4.47",
-    "autoprefixer": "10.4.20",
-    "eslint": "10.6.0",
-    "eslint-config-next": "14.2.15"
+    "eslint": "9.39.4",
+    "eslint-config-next": "16.2.10",
+    "@eslint/eslintrc": "3.3.1"
   }
 }

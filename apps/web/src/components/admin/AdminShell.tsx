@@ -1,10 +1,12 @@
 "use client";
-
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { ClientSwitcher } from "@/components/site/ClientSwitcher";
 import { SignOutButton } from "@/components/site/SignOutButton";
 import { SkipToContent } from "@/components/site/SkipToContent";
+
+import type { JSX } from "react";
 
 /**
  * Admin shell (Navigation_Spec §2): a persistent left sidebar so an admin can
@@ -24,6 +26,7 @@ const NAV: NavItem[] = [
   { label: "Risk Register", href: "/admin/risk-register" },
   { label: "Messages", href: "/admin/messages" },
   { label: "Users", href: "/admin/users" },
+  { label: "Audit log", href: "/admin/audit" },
   { label: "Management", href: "/admin/management" },
 ];
 
@@ -96,6 +99,7 @@ export function AdminShell({
               ))}
             </nav>
             <div className="ml-auto flex items-center gap-3">
+              <ClientSwitcher />
               <Link
                 href="/admin/queue"
                 className="rounded-md px-3 py-2 text-sm font-medium text-ink-secondary hover:text-ink-primary"

@@ -12,7 +12,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -24,6 +24,11 @@ _JSON_LIST = JSON().with_variant(JSONB, "postgresql")
 
 class RiskRegister(UUIDPKMixin, TimestampMixin, Base):
     __tablename__ = "risk_registers"
+    __table_args__ = (
+        # E-3: one register per (client, version); guards against a double
+        # generate racing two rows onto the same version number.
+        UniqueConstraint("client_id", "version", name="uq_risk_registers_client_version"),
+    )
 
     client_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("client.id", ondelete="CASCADE"), nullable=False, index=True
@@ -36,6 +41,15 @@ class RiskRegister(UUIDPKMixin, TimestampMixin, Base):
     # Newest current; older versions kept (superseded).
     superseded_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("risk_registers.id", ondelete="SET NULL")
+    )
+
+    # F-3: admin approval freezes the version — entries reject further edits and
+    # export is only permitted once the latest register is approved. A later
+    # generate creates the next (draft) version, preserving the supersession
+    # chain.
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    approved_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
     )
 
     # Exported artifacts (XLSX + PDF + Word), set on export.
@@ -86,3 +100,9 @@ class RiskEntry(UUIDPKMixin, TimestampMixin, Base):
     # Provenance (first-class + visible).
     origin: Mapped[str] = mapped_column(String(24), default="ai_generated", nullable=False)
     trust: Mapped[str | None] = mapped_column(String(32))
+
+    # F-3: a locked entry is preserved verbatim by regenerate (copied into the
+    # new version instead of being redrafted from synthesis).
+    locked: Mapped[bool] = mapped_column(default=False, nullable=False)
+    # F-3: soft delete — excluded from serialization and exports, never redrafted.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

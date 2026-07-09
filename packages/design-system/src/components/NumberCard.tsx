@@ -3,6 +3,8 @@ import * as React from "react";
 import { cn } from "../utils/cn";
 import { Card } from "./Card";
 
+import type { JSX } from "react";
+
 export interface NumberCardProps extends React.HTMLAttributes<HTMLDivElement> {
   label: string;
   value: string | number;

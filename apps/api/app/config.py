@@ -11,6 +11,13 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# H-5: default per-model price table (USD per million tokens, input/output).
+# Unknown models fall through to a null estimated cost in the usage report.
+_DEFAULT_LLM_PRICE_TABLE: dict[str, dict[str, float]] = {
+    "claude-sonnet-5": {"in": 3.0, "out": 15.0},
+    "claude-haiku-4-5": {"in": 0.8, "out": 4.0},
+}
+
 Environment = Literal["development", "staging", "production"]
 RedactionMode = Literal["strict", "standard", "off"]
 LLMProvider = Literal["anthropic", "openai", "azure_openai", "bedrock", "gemini", "local"]
@@ -50,9 +57,29 @@ class Settings(BaseSettings):
 
     # LLM (Master Spec §4.4 - never hardcoded)
     shield_llm_provider: LLMProvider = "anthropic"
-    shield_llm_model: str = "claude-opus-4-7"
+    shield_llm_model: str = "claude-sonnet-5"
     shield_llm_mode: Literal["fixture", "live"] = "fixture"
     anthropic_api_key: str = ""
+    # E-1: whole-call deadline for a single AI run. The provider.complete call is
+    # wrapped in a worker thread joined with this timeout; on expiry the run-ai
+    # route returns 504 and nothing is applied. 0 disables the deadline.
+    shield_llm_timeout_seconds: int = Field(default=300, ge=0)
+    # H-5: per-model price table (USD per million tokens). {model: {"in": x,
+    # "out": y}}. Drives the estimated cost in GET /admin/ai-usage; a model not
+    # present here yields a null cost estimate for its rows.
+    shield_llm_price_table: dict[str, dict[str, float]] = Field(
+        default_factory=lambda: dict(_DEFAULT_LLM_PRICE_TABLE)
+    )
+
+    # G-3: opt-in flag that permits an otherwise-forbidden production +
+    # fixture-LLM configuration (a scripted demo/showcase). "1" enables it; any
+    # other value keeps the guard armed. Sourced from env SHIELD_DEMO.
+    shield_demo: str = ""
+
+    # H-2: rate limits. Auth endpoints are keyed per-IP; AI run endpoints are
+    # keyed per-user. 0 disables the limiter for that class.
+    shield_rate_limit_auth_per_min: int = Field(default=10, ge=0)
+    shield_rate_limit_ai_per_min: int = Field(default=6, ge=0)
 
     # Bootstrap admin service account. When email+password are set, the app
     # provisions exactly one admin with this email at startup (idempotent);
@@ -69,7 +96,16 @@ class Settings(BaseSettings):
     # the test suite (which overrides the DB session per-test).
     shield_run_startup_maintenance: bool = True
 
-    # Feature flags (Master Spec §2 - deferred for v1)
+    # Feature flags (Master Spec §2). Landed in the D-017 auth package (July 2026):
+    #   * SHIELD_AUTH_REQUIRE_MFA: when true, users WITHOUT a TOTP factor can still
+    #     log in, but the login response carries `mfa_setup_required: true` so the
+    #     frontend can nudge enrollment. This flag does NOT block any server-side
+    #     route today; hard server-side enforcement is a future hardening step
+    #     (see DECISIONS D-017). Users who HAVE enrolled always get the TOTP
+    #     challenge regardless of this flag.
+    #   * SHIELD_AUTH_REQUIRE_EMAIL_VERIFY: when true, login is refused with 403
+    #     until the account's email is verified (checked only after the password
+    #     verifies, so it can't be used as an account-existence oracle).
     shield_auth_require_mfa: bool = False
     shield_auth_require_email_verify: bool = False
     shield_email_delivery_enabled: bool = False
@@ -80,10 +116,23 @@ class Settings(BaseSettings):
     # Session security (Master Spec §4.5)
     jwt_access_ttl_seconds: int = Field(default=900, ge=60)
     jwt_refresh_ttl_seconds: int = Field(default=1800, ge=300)
+    # TTL of the intermediate MFA-challenge token issued by /auth/login when a
+    # user has a TOTP factor. Short: the user must enter their 6-digit code
+    # within this window (default 5 min).
+    jwt_mfa_challenge_ttl_seconds: int = Field(default=300, ge=30)
     shield_account_lockout_max_attempts: int = Field(default=10, ge=1)
     shield_account_lockout_window_seconds: int = Field(default=900, ge=60)
-    shield_idle_timeout_seconds: int = Field(default=1800, ge=60)
-    shield_forced_reauth_seconds: int = Field(default=86400, ge=300)
+    # ENFORCED session controls (D-017 auth package, July 9 2026): checked
+    # server-side on /auth/refresh against the rotation records in
+    # refresh_tokens. Idle timeout bounds the gap between refreshes; forced
+    # re-auth caps a session family's total age. 0 disables either control.
+    shield_idle_timeout_seconds: int = Field(default=1800, ge=0)
+    shield_forced_reauth_seconds: int = Field(default=86400, ge=0)
+    # Reuse of a rotated refresh token within this window 401s WITHOUT killing
+    # the session family: concurrent server-side renders (NextAuth) can race a
+    # rotation benignly. Outside the window, reuse is treated as theft and the
+    # family is revoked. 0 = strict (every reuse kills the family).
+    shield_refresh_reuse_grace_seconds: int = Field(default=30, ge=0)
 
     # JWT signing
     jwt_signing_secret: str = (
@@ -94,6 +143,11 @@ class Settings(BaseSettings):
     smtp_host: str = "mailhog"
     smtp_port: int = 1025
     smtp_from: str = "no-reply@shield.local"
+    # Base URL the frontend is served from, used to build absolute links in
+    # outbound email (e.g. the email-verification link). Empty -> a root-relative
+    # path ("/verify-email?token=..."), which works when mail is viewed in the
+    # same origin (dev/MailHog).
+    shield_frontend_base_url: str = ""
 
     def is_production(self) -> bool:
         return self.environment == "production"
@@ -107,6 +161,16 @@ class Settings(BaseSettings):
             )
         if self.is_production() and self.jwt_signing_secret.startswith("dev-only"):
             raise RuntimeError("JWT_SIGNING_SECRET is still the default placeholder in production.")
+        # G-3: production must run real AI. Fixture mode ships deterministic
+        # canned answers, so a production deployment left in fixture mode would
+        # silently serve simulated analysis as if it were real. Allow it only
+        # for an explicit, acknowledged demo (SHIELD_DEMO=1).
+        if self.is_production() and self.shield_llm_mode == "fixture" and self.shield_demo != "1":
+            raise RuntimeError(
+                "SHIELD_LLM_MODE=fixture is forbidden when ENVIRONMENT=production "
+                "(simulated AI in production). Set SHIELD_LLM_MODE=live, or set "
+                "SHIELD_DEMO=1 to explicitly allow a fixture-mode demo."
+            )
 
 
 @lru_cache(maxsize=1)

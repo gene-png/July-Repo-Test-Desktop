@@ -176,8 +176,12 @@ def test_create_assessment_increments_version(app_client) -> None:
     c = app_client
     admin = register_admin(c, "admin@example.com")
     bearer = admin["tokens"]["access_token"]
+    h = {"Authorization": f"Bearer {bearer}"}
     svc_id = _open_service(c, bearer)
     v1 = _new_assessment(c, bearer, svc_id)
+    # E-3 open-draft guard: only mint a new version once v1 leaves its
+    # pre-approval working status (ATT&CK: DRAFT). Approve v1 first.
+    assert c.post(f"/attack/assessments/{v1['id']}/approve", headers=h).status_code == 200
     v2 = _new_assessment(c, bearer, svc_id)
     assert v1["version"] == 1
     assert v2["version"] == 2
@@ -221,6 +225,27 @@ def test_patch_coverage_rejects_bad_status(app_client) -> None:
         json={"status": "nope"},
     )
     assert r.status_code == 422
+
+
+@pytest.mark.unit
+def test_patch_coverage_evidence_cross_tenant_404(app_client) -> None:
+    """C-8: evidence_artifact_id must resolve inside the tenant.
+
+    An artifact id that isn't in this tenant (here: nonexistent, the same
+    guard branch as a cross-tenant id) is rejected 404 instead of being
+    silently attached.
+    """
+    c = app_client
+    admin = register_admin(c, "admin@example.com")
+    bearer = admin["tokens"]["access_token"]
+    svc_id = _open_service(c, bearer)
+    a = _new_assessment(c, bearer, svc_id)
+    r = c.patch(
+        f"/attack/coverage/{a['coverage'][0]['id']}",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"evidence_artifact_id": str(_uuid.uuid4())},
+    )
+    assert r.status_code == 404, r.text
 
 
 @pytest.mark.unit

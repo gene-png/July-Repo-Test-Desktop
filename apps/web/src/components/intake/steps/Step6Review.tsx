@@ -1,5 +1,4 @@
 "use client";
-
 import { StatusPill } from "@shield/design-system";
 
 import {
@@ -12,6 +11,8 @@ import {
   type ServiceRequestInput,
   type ServiceType,
 } from "@/lib/intake/types";
+
+import type { JSX } from "react";
 
 /** Human-readable summary of the client-set targets for a service, if any. */
 function targetSummary(

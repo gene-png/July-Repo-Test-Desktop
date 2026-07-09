@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -14,6 +13,8 @@ import {
 import { archiveService, listServices } from "@/lib/admin/client";
 import type { AdminServiceRow } from "@/lib/admin/types";
 import { SERVICE_LABELS } from "@/lib/intake/types";
+
+import type { JSX } from "react";
 
 function statusTone(
   status: string,

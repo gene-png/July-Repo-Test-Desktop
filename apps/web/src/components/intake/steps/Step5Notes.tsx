@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import { Field, inputClasses, textareaClasses } from "../Field";
@@ -16,6 +15,8 @@ import {
   type ServiceRequestInput,
   type ServiceType,
 } from "@/lib/intake/types";
+
+import type { JSX } from "react";
 
 export interface Step5NotesProps {
   state: IntakeStateResponse;

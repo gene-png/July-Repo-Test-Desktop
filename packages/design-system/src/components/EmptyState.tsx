@@ -2,6 +2,8 @@ import * as React from "react";
 
 import { cn } from "../utils/cn";
 
+import type { JSX } from "react";
+
 export interface EmptyStateProps extends React.HTMLAttributes<HTMLDivElement> {
   /** Required short heading describing the empty state. */
   title: string;

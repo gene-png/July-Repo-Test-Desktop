@@ -46,7 +46,8 @@ Any admin in a deployment may attach a reviewer. A reviewer's scope is the entir
 **2026-05-19 · workflow**
 Approval flow: **admin marks deliverable "final"** → **reviewer (if any) approves** → **admin releases to client**. Reviewer step is skipped when no reviewer is attached to the engagement.
 **Rationale:** Eugene confirmed recommended option. Matches Phase 5 reviewer audit-walk surface (Master Spec §15 Phase 5). The "if any" guard handles engagements without a reviewer without needing a second release path.
-**Ref:** Master Spec §17 Q4, §15 Phase 5.
+**Superseded in part:** the approval/release flow now runs **within a single client tenant** rather than deployment-wide (per the multi-tenant D-015 — reviewer scope is the active tenant), and the client-facing "release to client" step is **deprecated for v1** (clients never see a release action; terminal statuses read "Complete: your consultant will deliver your report" per the G-1 remediation, see `CHANGELOG.md` [Unreleased]).
+**Ref:** Master Spec §17 Q4, §15 Phase 5; superseded in part by D-015.
 
 ## D-007 — ATT&CK technique scope (spec §17 Q5) **[FLIPPED FROM RECOMMENDATION]**
 
@@ -73,6 +74,7 @@ See D-002. Anthropic Claude API as the v1 default, env-swappable.
 **2026-05-19 · i18n**
 English only at v1.0. Build i18n-aware (no hardcoded strings; locale-keyed message files via `next-intl` for web and `babel`/`gettext`-style catalogs for API responses). Additional locales added in v1.x as content-only PRs.
 **Rationale:** Eugene confirmed recommended option. Avoids translation cost in v1 while preserving zero-rewrite extensibility.
+**Rescinded for v1 (2026-07-09 remediation):** the i18n-plumbing requirement is **withdrawn for v1**. The shipped product is English-only with plain hardcoded copy; `next-intl` / gettext catalogs were not built and are **not** a v1 deliverable. The extensibility goal is deferred to whenever a second locale is actually funded; treat any claim that v1 is "i18n-aware / locale-keyed" as inaccurate. English-only at v1.0 still holds.
 **Ref:** Master Spec §17 Q7.
 
 ## D-010 — Repo layout: monorepo with pnpm workspaces + Python workspace
@@ -131,9 +133,9 @@ Opening commit lands directly on `main`. Push is deferred until the dev containe
 **Rationale:** AI Prompt §3.9 prescribes "push frequently" but §3.3 forbids the agent from introducing its own credentials. Eugene will push when he attaches a PAT or SSH key to the container.
 **Ref:** AI Prompt §3.3, §3.9.
 
-## D-015 — Part F: harden and ship decisions
+## D-016 — Part F: harden and ship decisions
 
-**2026-06-26 · F (harden)**
+**2026-06-26 · F (harden)** _(renumbered from duplicate D-015; see the multi-tenant D-015 above)_
 
 - **Worker / async:** AI runs are **synchronous** — the `run-ai` endpoints invoke
   the LLM inline via `app.ai.engine.run_job`. There is no Celery worker; the
@@ -160,3 +162,76 @@ Opening commit lands directly on `main`. Push is deferred until the dev containe
   run under `pytest -m unit` in CI.
 
 **Ref:** Work Order Part F.
+
+## D-017 — Session-control enforcement deferred into the MFA work package
+
+**2026-07-09 · auth (remediation H-1)**
+The idle-timeout and forced-re-auth session controls are **deferred**, not
+shipped. `SHIELD_IDLE_TIMEOUT_SECONDS` and `SHIELD_FORCED_REAUTH_SECONDS` are
+loaded by `config.py` but enforced by **no** code path today; earlier docs
+(README compensating-controls, BUILD_REPORT OWASP A07, this log) presented them
+as active controls, which was inaccurate. They are now annotated
+RESERVED/UNIMPLEMENTED at every surface (`.env.example`, `docker-compose.yml`,
+`config.py`, `infra/keycloak/README.md`).
+
+**Decision:** enforcement of idle timeout, forced re-auth, and refresh-token
+lifecycle is folded into the **MFA work package**, whose ordered scope is:
+
+1. **Refresh-token rotation + server-side revocation** (first item) — rotate the
+   refresh token on every use, persist a revocation/allow-list so a stolen or
+   idled token can be invalidated server-side. This is the prerequisite that
+   makes real idle-timeout and forced-re-auth enforceable.
+2. Idle-timeout enforcement (reject access when `now - last_seen >
+SHIELD_IDLE_TIMEOUT_SECONDS`).
+3. Forced re-auth enforcement (reject when session age >
+   `SHIELD_FORCED_REAUTH_SECONDS`).
+4. MFA enrollment + verification (TOTP/WebAuthn) and email verification, gated by
+   `SHIELD_AUTH_REQUIRE_MFA` / `SHIELD_AUTH_REQUIRE_EMAIL_VERIFY`.
+
+Until that package lands, the **enforced** compensating controls are the short
+JWT access-token TTL and account lockout only.
+
+**Rationale:** honesty over aspiration — a control that no code reads is not a
+control. Refresh-token rotation is named first because idle/forced-reauth
+enforcement is not meaningful without server-side session invalidation.
+**Ref:** Master Spec §2 (MFA deferred), §4.5 (session security); remediation H-1.
+
+**Update (2026-07-09, later the same day):** items 1-3 of the package landed
+(migration `0037_refresh_tokens`, `routes/auth.py`). Refresh tokens now rotate
+on every use with server-side records; reusing a rotated token revokes the
+whole session family; logout revokes server-side; idle timeout and forced
+re-auth are enforced on `/auth/refresh` via `SHIELD_IDLE_TIMEOUT_SECONDS` /
+`SHIELD_FORCED_REAUTH_SECONDS` (0 disables). The RESERVED annotations were
+removed everywhere.
+
+**Update (2026-07-09, item 4 landed):** MFA (TOTP) and email verification
+shipped (migration `0038_mfa_email_verify`, `routes/auth.py`,
+`notifications/email.py`, frontend sign-in / account / verify-email).
+
+- **TOTP MFA** (`pyotp`): `POST /auth/mfa/enroll` mints a base32 secret +
+  otpauth URI (issuer "SHIELD by Kentro") stored on the user but _not_ active;
+  `/auth/mfa/activate` flips `mfa_enrolled` only after a live code verifies;
+  `/auth/mfa/disable` clears it (also requires a current code). An enrolled
+  user's `/auth/login` returns `{mfa_required: true, challenge_token}` (a
+  5-minute JWT with `typ=mfa_challenge`, kept strictly separate from
+  access/refresh by `verify_token`) instead of tokens; `/auth/mfa/verify`
+  exchanges the challenge + code for the normal pair. A wrong code counts toward
+  the existing lockout counters.
+- **`SHIELD_AUTH_REQUIRE_MFA` semantics (scoped):** the flag only drives the
+  frontend nudge — an enrolled-less user still logs in, but the login response
+  carries `mfa_setup_required: true`. It blocks **nothing** server-side today.
+  **Future hardening:** promote this to a server-side gate that refuses
+  non-enrolled users (or forces enrollment) once organizational rollout is
+  ready; deliberately out of scope here to avoid locking existing users out.
+- **Email verification:** every registration mints a `secrets.token_urlsafe`
+  token (only its sha256 stored, table `email_verification_tokens`, 24h expiry)
+  and best-effort emails the `/verify-email?token=...` link (SMTP send never
+  blocks or fails registration; gated by `SHIELD_EMAIL_DELIVERY_ENABLED`).
+  `/auth/verify-email` consumes it; `/auth/resend-verification` invalidates
+  prior tokens. When `SHIELD_AUTH_REQUIRE_EMAIL_VERIFY` is on, `/auth/login`
+  returns 403 for an unverified account **after** the password check, so it
+  can't be used as an account-existence oracle.
+
+Item 4 completes the D-017 package. The login response gained a superset shape
+(`LoginResponse`): the token fields are unchanged for MFA-off callers, with
+additive `mfa_required` / `challenge_token` / `mfa_setup_required` fields.

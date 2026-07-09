@@ -36,12 +36,19 @@ def render_xlsx(
     version: int,
     enterprise_rows: Sequence[Any],
     tier_profiles: Mapping[str, Sequence[Any]],
+    unscored_keys: frozenset[tuple[str, str]] | None = None,
+    action_items: Sequence[Any] | None = None,
 ) -> bytes:
     """`enterprise_rows` are EnterpriseSubcategory-like; `tier_profiles` maps a
-    tier name to its CsfDimensionScoreResponse-like rows (total/level computed)."""
+    tier name to its CsfDimensionScoreResponse-like rows (total/level computed).
+
+    `unscored_keys` is the set of (tier, subcategory_code) pairs whose row has no
+    scored_at stamp; those cells render "Unscored" rather than a misleading L1
+    computed from all-zero dimensions (B-3 belt-and-suspenders)."""
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill
 
+    unscored_keys = unscored_keys or frozenset()
     wb = Workbook()
     head_fill = PatternFill(start_color="FFEEF2F7", end_color="FFEEF2F7", fill_type="solid")
 
@@ -111,6 +118,7 @@ def render_xlsx(
             ],
         )
         for row in rows:
+            is_unscored = (tier, row.subcategory_code) in unscored_keys
             ts.append(
                 [
                     row.subcategory_code,
@@ -119,14 +127,35 @@ def render_xlsx(
                     row.implementation,
                     row.monitoring,
                     row.improvement,
-                    row.total,
-                    f"L{row.level}",
+                    "Unscored" if is_unscored else row.total,
+                    "Unscored" if is_unscored else f"L{row.level}",
                     "Yes" if row.evidence_capped else "",
                     "Yes" if row.in_scope else "No",
                     f"L{row.target_level}" if row.target_level else "",
                 ]
             )
         _autofit(ts)
+
+    # --- Action Plan (H-8) — always present, even when empty ---
+    ap = wb.create_sheet("Action Plan")
+    _header(ap, ["Subcategory", "Owner", "Due date", "Status", "Milestone"])
+    items = list(action_items or [])
+    if items:
+        for it in items:
+            due = getattr(it, "due_date", None)
+            ap.append(
+                [
+                    getattr(it, "subcategory_code", ""),
+                    getattr(it, "owner", "") or "",
+                    due.isoformat() if due is not None else "",
+                    str(getattr(getattr(it, "status", ""), "value", getattr(it, "status", ""))),
+                    getattr(it, "milestone", "") or "",
+                ]
+            )
+    else:
+        ap.append(["No action items yet", "", "", "", ""])
+        ap.cell(row=2, column=1).font = Font(italic=True)
+    _autofit(ap)
 
     cover = wb.create_sheet("About", 0)
     cover.append(["SHIELD by Kentro — CSF 2.0 Full Playbook"])

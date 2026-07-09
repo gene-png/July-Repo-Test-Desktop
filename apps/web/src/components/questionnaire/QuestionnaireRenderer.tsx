@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import { Card, CardBody, CardHeader, CardTitle } from "@shield/design-system";
@@ -12,6 +11,8 @@ import type {
   Responses,
   ResponseValue,
 } from "./types";
+
+import type { JSX } from "react";
 
 export interface QuestionnaireRendererProps {
   definition: QuestionnaireDefinition;

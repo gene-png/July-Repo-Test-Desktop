@@ -1,5 +1,4 @@
 "use client";
-
 import {
   Card,
   CardBody,
@@ -11,6 +10,8 @@ import {
 } from "@shield/design-system";
 
 import type { CsfScoreSummary } from "@/lib/csf/types";
+
+import type { JSX } from "react";
 
 export interface CsfScoreCardProps {
   score: CsfScoreSummary | null;

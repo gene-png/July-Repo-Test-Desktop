@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import type { JSX } from "react";
+
 /**
  * Breadcrumb trail (Navigation_Spec §3). Every segment except the last is a
  * link; the current page is the last, non-link segment.

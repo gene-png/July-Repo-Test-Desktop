@@ -4,6 +4,13 @@ All notable changes to SHIELD by Kentro v2.0. Format roughly follows [Keep a Cha
 
 ## [Unreleased]
 
+### FABLE remediation: trustworthy core + honest docs (Sprints 0–3) — 2026-07-09
+
+- **Sprint 0 — repair baseline:** fixed the broken frontend baseline and stood up the Playwright e2e harness so the remediation could be validated end-to-end.
+- **Sprint 1 — trustworthy core:** live AI contracts (per-job response-shape validation), deliverable generation gates, and extraction honesty (no fabricated coverage).
+- **Sprint 2 — solid operations:** bounded AI runtime (per-job model + token budgets, advisory locks), robust extraction, Redis-backed rate limiting, redaction preview + one-time live-run acknowledgment, per-tenant `llm_calls` usage accounting, and an honest UI.
+- **Sprint 3 — completeness + truth:** export completeness (full gap lists, roadmap, ATT&CK ordering, CSF action plan), risk-register governance (entry edit/lock/soft-delete, register approval, export gate), frontend completeness (auth redirects, admin audit viewer, risk editor), and **ops/docs truth**: seed-loader fixes (`SHIELD_SEED_DATA_DIR` + sys.path bootstrap, `packages/` container mount, root `Makefile`), backup/restore scripts + runbook + a passing restore drill, a truthful `docs/architecture.md` (multi-tenant, synchronous AI, `audit_entries`, one-way redaction, no Celery worker), and corrected compensating-control claims (idle timeout / forced re-auth / refresh rotation marked planned-not-enforced; `DECISIONS.md` D-017, duplicate D-015 renumbered to D-016, D-006/D-009 annotated).
+
 ### Multi-tenant: allow many clients per deployment — 2026-05-21
 
 - Added `client_id` to `services`, `service_requests`, `artifacts` (Alembic 0013); made `client_id` `NOT NULL` on `csf_assessments`, `csf_answers`, `zt_assessments`, `zt_answers`, `attack_assessments`, `attack_coverage` after backfill from the deployment's existing singleton client (or a placeholder `(legacy backfill)` client when business data exists but no `client` row does).

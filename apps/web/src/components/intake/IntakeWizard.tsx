@@ -1,5 +1,4 @@
 "use client";
-
 import { useSession } from "next-auth/react";
 import * as React from "react";
 
@@ -28,6 +27,8 @@ import { Step4Systems } from "./steps/Step4Systems";
 import { Step5Notes } from "./steps/Step5Notes";
 import { Step6Review } from "./steps/Step6Review";
 import { useIntakeAutoSave } from "./useIntakeAutoSave";
+
+import type { JSX } from "react";
 
 const STEP_INDEX: Record<WizardStepKey, number> = WIZARD_STEPS.reduce(
   (acc, step, i) => {

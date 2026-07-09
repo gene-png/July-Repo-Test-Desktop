@@ -20,6 +20,7 @@ from app.models.capability import (
 )
 from app.models.client import Client
 from app.models.client_domain import ClientDomain
+from app.models.csf_action_item import CsfActionItem, CsfActionStatus
 from app.models.csf_assessment import (
     CsfAnswer,
     CsfAssessment,
@@ -27,10 +28,12 @@ from app.models.csf_assessment import (
 )
 from app.models.csf_profile import CsfDimensionScore
 from app.models.deliverable import Deliverable
+from app.models.email_verification_token import EmailVerificationToken
 from app.models.llm_call import LLMCall, LLMCallMode, LLMCallStatus
 from app.models.message import Message
 from app.models.notification import Notification
 from app.models.questionnaire import Question
+from app.models.refresh_token import RefreshToken
 from app.models.risk_register import RiskEntry, RiskRegister
 from app.models.service import Service, ServiceKind, ServiceStatus
 from app.models.service_request import ServiceRequest, ServiceType
@@ -54,17 +57,21 @@ __all__ = [
     "CapabilityListStatus",
     "Client",
     "ClientDomain",
+    "CsfActionItem",
+    "CsfActionStatus",
     "CsfAnswer",
     "CsfAssessment",
     "CsfAssessmentStatus",
     "CsfDimensionScore",
     "Deliverable",
+    "EmailVerificationToken",
     "LLMCall",
     "LLMCallMode",
     "LLMCallStatus",
     "Message",
     "Notification",
     "Question",
+    "RefreshToken",
     "RiskEntry",
     "RiskRegister",
     "Service",

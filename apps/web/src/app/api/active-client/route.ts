@@ -16,7 +16,7 @@ const UUID_RE =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 export async function GET(): Promise<NextResponse> {
-  const value = cookies().get(ACTIVE_CLIENT_COOKIE)?.value ?? null;
+  const value = (await cookies()).get(ACTIVE_CLIENT_COOKIE)?.value ?? null;
   return NextResponse.json({ active: value });
 }
 
@@ -28,7 +28,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "Body must be JSON." }, { status: 400 });
   }
 
-  const jar = cookies();
+  const jar = await cookies();
   if (body.clientId == null || body.clientId === "") {
     jar.delete(ACTIVE_CLIENT_COOKIE);
     return NextResponse.json({ active: null });

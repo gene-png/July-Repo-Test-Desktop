@@ -23,16 +23,19 @@ import uuid
 from collections.abc import Iterable
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.ai.contracts import validate_response
 from app.ai.diff import diff_keyed_rows
 from app.ai.engine import run_job
-from app.ai.llm import LLMClient
+from app.ai.llm import LLMClient, has_preview_ack
 from app.audit import audit
-from app.db.session import get_db
+from app.db.session import assessment_advisory_lock, get_db
 from app.dependencies import current_client, current_user, require_role
+from app.middleware.ratelimit import rate_limit_user
 from app.models._common import utcnow
 from app.models.artifact import Artifact, ArtifactOrigin
 from app.models.client import Client
@@ -77,6 +80,7 @@ from app.tech_debt.filename import (
     deliverable_filename,
 )
 from app.tenant import (
+    require_artifact_in_tenant,
     require_service_in_tenant,
     require_zt_assessment_in_tenant,
 )
@@ -97,6 +101,8 @@ from app.zt.scoring import compute as compute_score
 router = APIRouter(prefix="/zt", tags=["zt"])
 
 _admin_required = Depends(require_role(UserRole.ADMIN))
+# H-2: per-user token-bucket limiter on the AI run endpoint.
+_ai_rate_limited = Depends(rate_limit_user())
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +169,7 @@ def _serialize_assessment(db: Session, a: ZtAssessment) -> ZtAssessmentResponse:
         documents_stale=a.documents_stale,
         answers=_serialize_answers(rows),
         client_target_stage=_client_target_stage(db, a.service_id),
+        narratives=a.narratives,
     )
 
 
@@ -331,159 +338,15 @@ def _llm_dep() -> LLMClient:
     return LLMClient.from_settings()
 
 
-@router.post(
-    "/services/{service_id}/run-ai",
-    response_model=ZtRunAiResponse,
-    summary="Run the zt_score AI job: suggest current + target per capability (admin)",
-)
-def run_ai(
-    service_id: uuid.UUID,
-    user: Annotated[User, _admin_required],
-    client: Annotated[Client, Depends(current_client)],
-    db: Annotated[Session, Depends(get_db)],
-    llm: Annotated[LLMClient, Depends(_llm_dep)],
-) -> ZtRunAiResponse:
-    """The ZT 'Run AI'. Suggests a current and target maturity level per
-    capability (on the framework's own scale) plus per-pillar narratives. AI
-    suggests; locked rows are untouched; code does the pillar roll-up + roadmap.
-    Returns a 'what changed' list.
+def _new_assessment(db: Session, svc: Service, client: Client, user: User) -> ZtAssessment:
+    """Mint a fresh draft ZT assessment + seeded capability answer rows (F-2).
+
+    Adds to the session and flushes (caller commits); shared by create-assessment
+    and the run-ai auto-create path. Does not apply the open-draft guard — callers
+    that must respect it check _latest_assessment first.
     """
-    svc = require_service_in_tenant(db, service_id, client.id)
-    if svc.kind not in _SERVICE_KIND_TO_FRAMEWORK:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Zero Trust service not found."
-        )
-    a = _latest_assessment(db, svc.id)
-    if a is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Create an assessment first."
-        )
-    if a.status in (ZtAssessmentStatus.APPROVED, ZtAssessmentStatus.RELEASED):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="This assessment is locked."
-        )
-
-    cat_fw = _to_catalog_framework(a.framework)
-    max_stage = level_count(cat_fw)
-    valid = all_codes(cat_fw)
-    rows = {
-        r.capability_code: r
-        for r in db.execute(select(ZtAnswer).where(ZtAnswer.assessment_id == a.id)).scalars().all()
-        if r.capability_code in valid
-    }
-    locked_keys = frozenset(code for code, r in rows.items() if r.locked)
-
-    def _snap() -> dict[str, dict]:
-        return {
-            code: {"maturity_stage": r.maturity_stage, "target_stage": r.target_stage}
-            for code, r in rows.items()
-        }
-
-    before = _snap()
-
-    def _coerce(v: object) -> int | None:
-        try:
-            iv = int(v)  # type: ignore[arg-type]
-        except (TypeError, ValueError):
-            return None
-        return iv if 1 <= iv <= max_stage else None
-
-    client_org = None if client.legal_name == "(pending intake)" else client.legal_name
-    result = run_job(
-        db,
-        llm,
-        "zt_score",
-        inputs={
-            "framework": a.framework.value,
-            "capabilities": sorted(rows),
-            "answers": {
-                code: {"notes": r.notes, "current": r.maturity_stage} for code, r in rows.items()
-            },
-        },
-        requested_by=user.id,
-        service_id=svc.id,
-        client_org_name=client_org,
-    )
-    data = result.data if isinstance(result.data, dict) else {}
-
-    for sugg in data.get("capabilities", []):
-        if not isinstance(sugg, dict):
-            continue
-        row = rows.get(sugg.get("code"))
-        if row is None or row.locked:
-            continue
-        cur = _coerce(sugg.get("current"))
-        if cur is not None:
-            row.maturity_stage = cur
-        tgt = _coerce(sugg.get("target"))
-        if tgt is not None:
-            row.target_stage = tgt
-        row.answered_by = user.id
-        row.answered_at = utcnow()
-
-    db.flush()
-    after = _snap()
-    diffs = diff_keyed_rows(
-        before, after, ["maturity_stage", "target_stage"], locked_keys=locked_keys
-    )
-    changes = [
-        ZtCapabilityChange(capability_code=d.key, field=ch.field, old=ch.old, new=ch.new)
-        for d in diffs
-        for ch in d.changes
-    ]
-    narratives = data.get("pillar_narratives")
-    narratives = narratives if isinstance(narratives, dict) else {}
-
-    a.documents_stale = True  # Work Order C3
-    audit(
-        db,
-        action="zt.run_ai",
-        target_type="zt_assessment",
-        target_id=a.id,
-        actor_user_id=user.id,
-        details={"changed_rows": len(diffs)},
-    )
-    db.commit()
-
-    answers_out = [
-        ZtAnswerResponse.model_validate(r, from_attributes=True)
-        for r in sorted(rows.values(), key=lambda r: r.capability_code)
-    ]
-    return ZtRunAiResponse(
-        changed=changes,
-        answers=answers_out,
-        pillar_narratives={str(k): str(v) for k, v in narratives.items()},
-        executive_summary=(data.get("executive_summary") or None),
-        roadmap_summary=(data.get("roadmap_summary") or None),
-    )
-
-
-# ---------------------------------------------------------------------------
-# Assessments
-# ---------------------------------------------------------------------------
-
-
-@router.post(
-    "/services/{service_id}/assessments",
-    response_model=ZtAssessmentResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Create a new draft Zero Trust assessment (admin)",
-)
-def create_assessment(
-    service_id: uuid.UUID,
-    user: Annotated[User, _admin_required],
-    client: Annotated[Client, Depends(current_client)],
-    db: Annotated[Session, Depends(get_db)],
-) -> ZtAssessmentResponse:
-    svc = require_service_in_tenant(db, service_id, client.id)
-    if svc.kind not in _SERVICE_KIND_TO_FRAMEWORK:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Zero Trust service not found.",
-        )
     framework = _framework_for_kind(svc.kind)
     cat_fw = _to_catalog_framework(framework)
-
     prior = _latest_assessment(db, svc.id)
     version = (prior.version + 1) if prior else 1
     assessment = ZtAssessment(
@@ -515,6 +378,235 @@ def create_assessment(
             "framework": framework.value,
         },
     )
+    db.flush()
+    return assessment
+
+
+@router.post(
+    "/services/{service_id}/run-ai",
+    response_model=ZtRunAiResponse,
+    summary="Run the zt_score AI job: suggest current + target per capability (admin)",
+    dependencies=[_ai_rate_limited],
+)
+def run_ai(
+    service_id: uuid.UUID,
+    user: Annotated[User, _admin_required],
+    client: Annotated[Client, Depends(current_client)],
+    db: Annotated[Session, Depends(get_db)],
+    llm: Annotated[LLMClient, Depends(_llm_dep)],
+    preview: Annotated[
+        bool, Query(description="Dry-run: return the redacted payload only")
+    ] = False,
+) -> ZtRunAiResponse:
+    """The ZT 'Run AI'. Suggests a current and target maturity level per
+    capability (on the framework's own scale) plus per-pillar narratives. AI
+    suggests; locked rows are untouched; code does the pillar roll-up + roadmap.
+    Returns a 'what changed' list.
+    """
+    svc = require_service_in_tenant(db, service_id, client.id)
+    if svc.kind not in _SERVICE_KIND_TO_FRAMEWORK:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Zero Trust service not found."
+        )
+    a = _latest_assessment(db, svc.id)
+    auto_created = False
+    if a is None:
+        # F-2: auto-create a seeded draft assessment (mirrors create-assessment)
+        # rather than 404-ing; the open-draft guard means a later create returns
+        # this same draft.
+        a = _new_assessment(db, svc, client, user)
+        auto_created = True
+    if a.status in (ZtAssessmentStatus.APPROVED, ZtAssessmentStatus.RELEASED):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="This assessment is locked."
+        )
+    # H-6: a live (non-preview) run requires a recorded redaction-preview ack.
+    if not preview and llm.mode == "live" and not has_preview_ack(db, client.id):
+        raise HTTPException(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            detail="Redaction preview acknowledgment required for this client before live AI runs",
+        )
+    # F-2/E-1: persist an auto-created assessment before the E-1 db.close()
+    # below (which discards uncommitted work). A preview never commits it.
+    if auto_created and not preview:
+        db.commit()
+    # E-3: serialize concurrent runs for this assessment (409 loser on Postgres).
+    if not preview:
+        assessment_advisory_lock(db, a.id)
+    aid = a.id
+    svc_id = svc.id
+    client_id = client.id
+    # Capture the actor id as a plain value: an auto-create commit above expires
+    # the dependency-loaded `user`, and the E-1 db.close() below detaches it.
+    user_id = user.id
+    framework_value = a.framework.value
+
+    cat_fw = _to_catalog_framework(a.framework)
+    max_stage = level_count(cat_fw)
+    valid = all_codes(cat_fw)
+    rows = {
+        r.capability_code: r
+        for r in db.execute(select(ZtAnswer).where(ZtAnswer.assessment_id == a.id)).scalars().all()
+        if r.capability_code in valid
+    }
+    locked_keys = frozenset(code for code, r in rows.items() if r.locked)
+
+    # E-1: snapshot to plain data before releasing the session.
+    before = {
+        code: {"maturity_stage": r.maturity_stage, "target_stage": r.target_stage}
+        for code, r in rows.items()
+    }
+
+    def _coerce(v: object) -> int | None:
+        try:
+            iv = int(v)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+        return iv if 1 <= iv <= max_stage else None
+
+    client_org = None if client.legal_name == "(pending intake)" else client.legal_name
+    inputs = {
+        "framework": framework_value,
+        "capabilities": sorted(rows),
+        "answers": {
+            code: {"notes": r.notes, "current": r.maturity_stage} for code, r in rows.items()
+        },
+    }
+
+    # H-6: preview short-circuits before any provider call or llm_calls row.
+    if preview:
+        prev = llm.preview(purpose="zt_score", inputs=inputs, client_org_name=client_org)
+        return JSONResponse({"preview": True, **prev})
+
+    # E-1: release the request connection during the provider call; re-load rows
+    # by id afterward (close() expunges the ORM objects above).
+    db.close()
+    result = run_job(
+        db,
+        llm,
+        "zt_score",
+        inputs=inputs,
+        requested_by=user_id,
+        service_id=svc_id,
+        client_id=client_id,
+        client_org_name=client_org,
+    )
+    # A-6: reject a wrong-shape response before the apply loop (nothing written).
+    problems = validate_response("zt_score", result.data)
+    if problems:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="AI response failed validation: " + "; ".join(problems),
+        )
+    data = result.data if isinstance(result.data, dict) else {}
+
+    a = db.get(ZtAssessment, aid)
+    rows = {
+        r.capability_code: r
+        for r in db.execute(select(ZtAnswer).where(ZtAnswer.assessment_id == aid)).scalars().all()
+        if r.capability_code in valid
+    }
+
+    for sugg in data.get("capabilities", []):
+        if not isinstance(sugg, dict):
+            continue
+        row = rows.get(sugg.get("code"))
+        if row is None or row.locked:
+            continue
+        cur = _coerce(sugg.get("current"))
+        if cur is not None:
+            row.maturity_stage = cur
+        tgt = _coerce(sugg.get("target"))
+        if tgt is not None:
+            row.target_stage = tgt
+        row.answered_by = user_id
+        row.answered_at = utcnow()
+
+    db.flush()
+    after = {
+        code: {"maturity_stage": r.maturity_stage, "target_stage": r.target_stage}
+        for code, r in rows.items()
+    }
+    diffs = diff_keyed_rows(
+        before, after, ["maturity_stage", "target_stage"], locked_keys=locked_keys
+    )
+    changes = [
+        ZtCapabilityChange(capability_code=d.key, field=ch.field, old=ch.old, new=ch.new)
+        for d in diffs
+        for ch in d.changes
+    ]
+    narratives = data.get("pillar_narratives")
+    narratives = narratives if isinstance(narratives, dict) else {}
+    pillar_narratives = {str(k): str(v) for k, v in narratives.items()}
+    executive_summary = data.get("executive_summary") or None
+    roadmap_summary = data.get("roadmap_summary") or None
+
+    # E-4: persist the AI narrative output on the assessment so the GET echoes it.
+    a.narratives = {
+        "pillar_narratives": pillar_narratives,
+        "executive_summary": executive_summary,
+        "roadmap_summary": roadmap_summary,
+    }
+    a.documents_stale = True  # Work Order C3
+    audit(
+        db,
+        action="zt.run_ai",
+        target_type="zt_assessment",
+        target_id=a.id,
+        actor_user_id=user_id,
+        details={"changed_rows": len(diffs)},
+    )
+    db.commit()
+
+    answers_out = [
+        ZtAnswerResponse.model_validate(r, from_attributes=True)
+        for r in sorted(rows.values(), key=lambda r: r.capability_code)
+    ]
+    return ZtRunAiResponse(
+        changed=changes,
+        answers=answers_out,
+        pillar_narratives=pillar_narratives,
+        executive_summary=executive_summary,
+        roadmap_summary=roadmap_summary,
+        mode=llm.mode,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Assessments
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/services/{service_id}/assessments",
+    response_model=ZtAssessmentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new draft Zero Trust assessment (admin)",
+)
+def create_assessment(
+    service_id: uuid.UUID,
+    user: Annotated[User, _admin_required],
+    client: Annotated[Client, Depends(current_client)],
+    db: Annotated[Session, Depends(get_db)],
+    response: Response,
+) -> ZtAssessmentResponse:
+    svc = require_service_in_tenant(db, service_id, client.id)
+    if svc.kind not in _SERVICE_KIND_TO_FRAMEWORK:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Zero Trust service not found.",
+        )
+
+    prior = _latest_assessment(db, svc.id)
+    # E-3 open-draft guard: return an in-progress (DRAFT/SUBMITTED) assessment
+    # as-is (200) rather than minting a new version.
+    if prior is not None and prior.status in (
+        ZtAssessmentStatus.DRAFT,
+        ZtAssessmentStatus.SUBMITTED,
+    ):
+        response.status_code = status.HTTP_200_OK
+        return _serialize_assessment(db, prior)
+    assessment = _new_assessment(db, svc, client, user)
     db.commit()
     db.refresh(assessment)
     return _serialize_assessment(db, assessment)
@@ -538,6 +630,7 @@ def latest_assessment(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No assessment yet.",
         )
+    # RELEASED is deprecated for v1 (no in-app release; G-1)
     if user.role != UserRole.ADMIN and a.status != ZtAssessmentStatus.RELEASED:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -610,7 +703,10 @@ def patch_answer(
     if "notes" in data:
         row.notes = data["notes"]
     if "evidence_artifact_id" in data:
-        row.evidence_artifact_id = data["evidence_artifact_id"]
+        ev = data["evidence_artifact_id"]
+        if ev is not None:
+            require_artifact_in_tenant(db, ev, client.id)
+        row.evidence_artifact_id = ev
     if data.get("locked") is not None:
         row.locked = bool(data["locked"])
     row.answered_by = user.id
@@ -1069,8 +1165,31 @@ def finalize_zt_deliverable(
     notes_map: dict[str, str | None] = {
         r.capability_code: r.notes for r in answers if r.capability_code in valid
     }
+    targets_map: dict[str, int | None] = {
+        r.capability_code: r.target_stage for r in answers if r.capability_code in valid
+    }
+    # Engagement-level target: the client's intake goal via the source request,
+    # falling back to the engine default only when neither per-capability
+    # targets nor an intake goal exists (B-1). Mirrors the dashboard endpoint.
+    engagement_target = _client_target_stage(db, svc.id)
     score = compute_score(cat_fw, stage_map)
-    gap = analyze_gaps(cat_fw, stage_map, notes=notes_map)
+    if engagement_target is not None:
+        gap = analyze_gaps(
+            cat_fw,
+            stage_map,
+            notes=notes_map,
+            target_stage=engagement_target,
+            targets=targets_map,
+            top_n=None,  # B-4: XLSX Gap Plan carries every gap; PDF/DOCX cap at 20.
+        )
+    else:
+        gap = analyze_gaps(
+            cat_fw,
+            stage_map,
+            notes=notes_map,
+            targets=targets_map,
+            top_n=None,  # B-4: XLSX Gap Plan carries every gap; PDF/DOCX cap at 20.
+        )
 
     client_name = client.legal_name
     if client_name == "(pending intake)":

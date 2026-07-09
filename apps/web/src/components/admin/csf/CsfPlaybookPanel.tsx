@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -20,6 +19,8 @@ import {
   seedProfiles,
 } from "@/lib/csf/client";
 
+import { SimulatedBadge } from "@/components/admin/SimulatedBadge";
+
 import { CsfDimensionEditor } from "./CsfDimensionEditor";
 import type {
   CsfPlaybookExport,
@@ -27,6 +28,8 @@ import type {
   EnterpriseProfile,
   EnterpriseSubcategory,
 } from "@/lib/csf/types";
+
+import type { JSX } from "react";
 
 export interface CsfPlaybookPanelProps {
   serviceId: string;
@@ -276,7 +279,7 @@ export function CsfPlaybookPanel({
                 .size === 1
                 ? "y"
                 : "ies"}
-              .
+              . {runResult.mode === "fixture" ? <SimulatedBadge /> : null}
             </p>
           ) : null}
 

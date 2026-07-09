@@ -25,6 +25,13 @@ class AdminServiceDetail(BaseModel):
     client_id: uuid.UUID
 
 
+class AiJobOverride(BaseModel):
+    """Per-job provider override reported by ai-status (Task S1-A A-3/A-5)."""
+
+    model: str | None = None
+    max_tokens: int | None = None
+
+
 class AdminAiStatus(BaseModel):
     """AI pipeline readiness. Never includes the API key itself."""
 
@@ -33,6 +40,39 @@ class AdminAiStatus(BaseModel):
     model: str
     ready: bool
     detail: str
+    # Boot-readiness diagnostics (Task S1-A A-5).
+    sdk_importable: bool
+    key_present: bool
+    # name -> {model, max_tokens} for every job that overrides the global model.
+    per_job_overrides: dict[str, AiJobOverride] = {}
+
+
+class AiUsageRow(BaseModel):
+    """One (client, month) usage bucket for GET /admin/ai-usage (H-5)."""
+
+    client_id: uuid.UUID | None
+    month: str  # "YYYY-MM"
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    # Null when any row in the bucket used a model absent from the price table.
+    estimated_cost_usd: float | None
+
+
+class AiUsageResponse(BaseModel):
+    rows: list[AiUsageRow]
+
+
+class AiPreviewAckRequest(BaseModel):
+    """Body of POST /admin/ai-preview-ack: acknowledge the redaction preview for
+    a client so live AI runs are permitted (H-6)."""
+
+    client_id: uuid.UUID
+
+
+class AiPreviewAckResponse(BaseModel):
+    client_id: uuid.UUID
+    acknowledged: bool
 
 
 class AdminUserSummary(BaseModel):
@@ -196,3 +236,32 @@ class AdminDomainListResponse(BaseModel):
 
 class AdminDomainCreateRequest(BaseModel):
     domain: str
+
+
+class AdminAuditRow(BaseModel):
+    """One append-only audit entry (H-7 viewer).
+
+    `client_id` is surfaced from the entry's `details` payload when the acting
+    route recorded it there; it is not a column on the audit table.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    at: datetime
+    action: str
+    target_type: str
+    target_id: uuid.UUID | None = None
+    actor_user_id: uuid.UUID | None = None
+    client_id: uuid.UUID | None = None
+    details: dict | None = None
+    correlation_id: str | None = None
+
+
+class AdminAuditListResponse(BaseModel):
+    """A page of audit entries plus the total matching the active filters."""
+
+    rows: list[AdminAuditRow]
+    total: int
+    limit: int
+    offset: int

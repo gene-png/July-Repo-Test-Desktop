@@ -1,17 +1,40 @@
 "use client";
-
 import * as React from "react";
 import Link from "next/link";
 
 import { Card, CardBody, EmptyState } from "@shield/design-system";
 
+import { ClientSwitcher } from "@/components/site/ClientSwitcher";
 import { workspaceHref } from "@/lib/admin/types";
 import { SERVICE_LABELS, type ServiceType } from "@/lib/intake/types";
 import {
   describeMessagesError,
   fetchInbox,
+  MessagesProxyError,
   type InboxThread,
 } from "@/lib/messages/client";
+
+import type { JSX } from "react";
+
+/** Empty state prompting an admin to choose the active client. */
+function PickClientEmptyState({
+  onPicked,
+}: {
+  onPicked?: () => void;
+}): JSX.Element {
+  return (
+    <EmptyState
+      title="Pick a client first"
+      description="Message threads are scoped to the active client. Choose one to see theirs."
+      action={
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-ink-secondary">Pick a client:</span>
+          <ClientSwitcher onChanged={onPicked} />
+        </div>
+      }
+    />
+  );
+}
 
 function fmtTime(value: string | null): string {
   if (!value) return "";
@@ -67,15 +90,28 @@ export function InboxView(): JSX.Element {
   const [threads, setThreads] = React.useState<InboxThread[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+  const [noClient, setNoClient] = React.useState(false);
+  // Bumped by the inline switcher so the inbox reloads for the new tenant.
+  const [reloadKey, setReloadKey] = React.useState(0);
 
   React.useEffect(() => {
     let active = true;
+    setLoading(true);
+    setError(null);
+    setNoClient(false);
     fetchInbox()
       .then((r) => {
         if (active) setThreads(r.threads);
       })
       .catch((err) => {
-        if (active) setError(describeMessagesError(err));
+        if (!active) return;
+        // No active client (admin hasn't picked one) is a 400 — surface the
+        // switcher, not a raw error.
+        if (err instanceof MessagesProxyError && err.status === 400) {
+          setNoClient(true);
+        } else {
+          setError(describeMessagesError(err));
+        }
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -83,9 +119,11 @@ export function InboxView(): JSX.Element {
     return () => {
       active = false;
     };
-  }, []);
+  }, [reloadKey]);
 
   if (loading) return <p className="text-sm text-ink-tertiary">Loading…</p>;
+  if (noClient)
+    return <PickClientEmptyState onPicked={() => setReloadKey((k) => k + 1)} />;
   if (error)
     return (
       <p className="text-sm text-status-danger-fg" role="alert">
@@ -96,7 +134,7 @@ export function InboxView(): JSX.Element {
     return (
       <EmptyState
         title="No message threads"
-        description="Threads appear here once a service for the selected client has a conversation. Pick a client from the switcher to see theirs."
+        description="Threads appear here once a service for the selected client has a conversation."
       />
     );
 

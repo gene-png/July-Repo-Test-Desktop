@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -19,6 +18,8 @@ import type {
 } from "@/lib/attack/types";
 
 import { StatusBadge } from "./StatusBadge";
+
+import type { JSX } from "react";
 
 const ALL_STATUSES: CoverageStatus[] = [
   "covered",

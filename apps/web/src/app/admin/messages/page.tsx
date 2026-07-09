@@ -3,6 +3,8 @@ import type { Metadata } from "next";
 import { InboxView } from "@/components/admin/InboxView";
 import { Breadcrumbs } from "@/components/site/Breadcrumbs";
 
+import type { JSX } from "react";
+
 export const metadata: Metadata = { title: "Messages" };
 
 export default function AdminMessagesPage(): JSX.Element {

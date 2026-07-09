@@ -1,7 +1,8 @@
 "use client";
-
 import { Field, textareaClasses } from "../Field";
 import type { IntakeStateResponse } from "@/lib/intake/types";
+
+import type { JSX } from "react";
 
 export interface Step4SystemsProps {
   state: IntakeStateResponse;

@@ -1,10 +1,11 @@
 "use client";
-
 import * as React from "react";
 
 import { cn } from "@shield/design-system";
 
 import type { QuestionnaireSection } from "./types";
+
+import type { JSX } from "react";
 
 export interface PillarNavigationProps {
   sections: QuestionnaireSection[];

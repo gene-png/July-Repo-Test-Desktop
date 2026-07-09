@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -16,6 +15,8 @@ import {
   postMessage,
   type MessageRow,
 } from "@/lib/messages/client";
+
+import type { JSX } from "react";
 
 export interface MessageThreadProps {
   serviceId: string;

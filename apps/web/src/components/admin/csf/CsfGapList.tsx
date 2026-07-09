@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -12,6 +11,8 @@ import {
 } from "@shield/design-system";
 
 import type { GapAnalysis } from "@/lib/csf/types";
+
+import type { JSX } from "react";
 
 export interface CsfGapListProps {
   analysis: GapAnalysis | null;

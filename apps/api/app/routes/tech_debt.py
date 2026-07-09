@@ -16,11 +16,12 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.ai.llm import LLMClient
+from app.ai.llm import LLMClient, has_preview_ack
 from app.audit import audit
 from app.db.session import get_db
 from app.dependencies import current_client, current_user, require_role
@@ -41,11 +42,12 @@ from app.schemas.tech_debt import (
     ExtractRequest,
     OverlapAnalysisResponse,
     OverlapBucketResponse,
+    ParseReportResponse,
     ServiceCreateRequest,
     ServiceResponse,
     TopCostItemResponse,
 )
-from app.storage import StorageBackend
+from app.storage import StorageBackend, StorageUnavailableError
 from app.tech_debt.exporters import (
     build_context,
     render_docx,
@@ -57,13 +59,19 @@ from app.tech_debt.extract import (
     client_org_name_for_tenant,
     extract_capabilities,
     name_hints_for_tenant,
+    preview_extraction,
 )
 from app.tech_debt.filename import (
     SERVICE_SLUG_BY_KIND,
     deliverable_filename,
 )
 from app.tech_debt.overlap import analyze_overlap
-from app.tech_debt.parsers import SUPPORTED_MIME, UnsupportedInventoryFormat
+from app.tech_debt.parsers import (
+    SUPPORTED_MIME,
+    CorruptInventoryError,
+    EmptyInventoryError,
+    UnsupportedInventoryFormat,
+)
 from app.tenant import (
     require_artifact_in_tenant,
     require_service_in_tenant,
@@ -128,7 +136,13 @@ def _latest_list_or_none(db: Session, service_id: uuid.UUID) -> CapabilityList |
     ).scalar_one_or_none()
 
 
-def _serialize_list_with_items(db: Session, cap_list: CapabilityList) -> CapabilityListResponse:
+def _serialize_list_with_items(
+    db: Session,
+    cap_list: CapabilityList,
+    *,
+    truncated: bool = False,
+    parse_report: ParseReportResponse | None = None,
+) -> CapabilityListResponse:
     items = (
         db.execute(select(CapabilityItem).where(CapabilityItem.capability_list_id == cap_list.id))
         .scalars()
@@ -142,6 +156,8 @@ def _serialize_list_with_items(db: Session, cap_list: CapabilityList) -> Capabil
         items=[CapabilityItemResponse.model_validate(i, from_attributes=True) for i in items],
         approved_at=cap_list.approved_at,
         approved_by=cap_list.approved_by,
+        truncated=truncated,
+        parse_report=parse_report,
     )
 
 
@@ -159,6 +175,9 @@ def extract_capability_list(
     db: Annotated[Session, Depends(get_db)],
     storage: Annotated[StorageBackend, Depends(_storage_dep)],
     llm: Annotated[LLMClient, Depends(_llm_dep)],
+    preview: Annotated[
+        bool, Query(description="Dry-run: return the redacted payload only")
+    ] = False,
 ) -> CapabilityListResponse:
     svc = require_service_in_tenant(db, service_id, client.id, kind=ServiceKind.TECH_DEBT)
     artifact = require_artifact_in_tenant(db, body.artifact_id, client.id)
@@ -167,6 +186,37 @@ def extract_capability_list(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail=(f"Inventory MIME {artifact.mime_type!r} is not supported. " "Use CSV or XLSX."),
         )
+    # H-6: a live (non-preview) run requires a recorded redaction-preview ack.
+    if not preview and llm.mode == "live" and not has_preview_ack(db, client.id):
+        raise HTTPException(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            detail="Redaction preview acknowledgment required for this client before live AI runs",
+        )
+    # H-6: preview returns the redacted payload only — no provider call, no rows.
+    if preview:
+        try:
+            prev = preview_extraction(
+                storage=storage,
+                artifact=artifact,
+                client_org_name=client_org_name_for_tenant(db, client.id),
+                name_hints=name_hints_for_tenant(db, client.id),
+                llm=llm,
+            )
+        except (EmptyInventoryError, CorruptInventoryError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail="Artifact bytes no longer available.",
+            ) from exc
+        except StorageUnavailableError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="document storage is temporarily unreachable",
+            ) from exc
+        return JSONResponse({"preview": True, **prev})
 
     try:
         result = extract_capabilities(
@@ -175,6 +225,7 @@ def extract_capability_list(
             artifact=artifact,
             requested_by=user,
             service_id=svc.id,
+            client_id=client.id,
             client_org_name=client_org_name_for_tenant(db, client.id),
             name_hints=name_hints_for_tenant(db, client.id),
             llm=llm,
@@ -183,6 +234,27 @@ def extract_capability_list(
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail=str(exc),
+        ) from exc
+    except (EmptyInventoryError, CorruptInventoryError) as exc:
+        # No usable data rows (empty/header-only file) or an unreadable
+        # workbook (legacy .xls, corrupt upload). This is a client-side data
+        # problem, not an upstream AI failure, and no llm_calls row was
+        # written yet because we bail before run_job.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except FileNotFoundError as exc:
+        # The artifact row exists but its bytes are gone from storage (C-7).
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Artifact bytes no longer available.",
+        ) from exc
+    except StorageUnavailableError as exc:
+        # Storage is unreachable/misconfigured; retryable infra failure (C-7).
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="document storage is temporarily unreachable",
         ) from exc
     except ValueError as exc:
         # LLM returned unparseable JSON. The llm_calls row is already
@@ -232,7 +304,14 @@ def extract_capability_list(
     )
     db.commit()
     db.refresh(cap_list)
-    return _serialize_list_with_items(db, cap_list)
+    parse_report = (
+        ParseReportResponse.model_validate(result.parse_report, from_attributes=True)
+        if result.parse_report is not None
+        else None
+    )
+    return _serialize_list_with_items(
+        db, cap_list, truncated=result.truncated, parse_report=parse_report
+    )
 
 
 @router.get(
@@ -306,11 +385,17 @@ def patch_capability_item(
     # Lock/unlock is a meta-action handled separately so a NULL never reaches
     # the NOT NULL column and so it doesn't clear AI confidence on its own.
     locked_val = data.pop("locked", None)
+    # An explicit confidence_pct (validated 0-100 by the schema) is applied
+    # after the clear-on-edit below, so a deliberate confidence set survives a
+    # simultaneous content edit (C-4).
+    confidence_val = data.pop("confidence_pct", None)
     for field, value in data.items():
         setattr(item, field, value)
     if data:
         # A content edit -> no longer an AI guess.
         item.confidence_pct = None
+    if confidence_val is not None:
+        item.confidence_pct = confidence_val
     if locked_val is not None:
         item.locked = bool(locked_val)
 

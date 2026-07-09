@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -25,6 +24,8 @@ import type {
   CsfAssessment,
   CsfCatalog,
 } from "@/lib/csf/types";
+
+import type { JSX } from "react";
 
 const PROFILE_RANK: Record<string, number> = { LOW: 0, MOD: 1, HIGH: 2 };
 const PROFILE_LABEL: Record<string, string> = {
@@ -179,7 +180,25 @@ export function CsfSelfAssessment({
     );
   }
   if (submitted) {
-    return <SelfAssessmentSubmitted />;
+    // Post-submit: confirm, then show the answers read-only (inputs disabled).
+    return (
+      <div className="flex flex-col gap-6">
+        <SelfAssessmentSubmitted />
+        <Card>
+          <CardHeader>
+            <CardTitle>Your submitted answers</CardTitle>
+          </CardHeader>
+          <CardBody>
+            <CsfQuestionnaire
+              catalog={filteredCatalog}
+              answersByCode={answersByCode}
+              readOnly
+              onAnswerUpdate={() => {}}
+            />
+          </CardBody>
+        </Card>
+      </div>
+    );
   }
 
   // Coverage is over the in-scope (profile-filtered) subcategories only.

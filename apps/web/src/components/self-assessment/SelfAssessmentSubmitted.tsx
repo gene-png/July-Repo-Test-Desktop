@@ -2,6 +2,8 @@ import Link from "next/link";
 
 import { Card, CardBody, CardHeader, CardTitle } from "@shield/design-system";
 
+import type { JSX } from "react";
+
 /** Shown after a client submits a CSF/ZT self-assessment for admin review. */
 export function SelfAssessmentSubmitted(): JSX.Element {
   return (

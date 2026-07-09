@@ -3,6 +3,8 @@ import type { Metadata } from "next";
 import { PublicFooter } from "@/components/site/PublicFooter";
 import { PublicHeader } from "@/components/site/PublicHeader";
 
+import type { JSX } from "react";
+
 export const metadata: Metadata = { title: "Accessibility" };
 
 export default function AccessibilityPage(): JSX.Element {

@@ -229,6 +229,177 @@ def test_extract_runs_redacted_call_and_writes_capability_list(app_client) -> No
         assert cap_list.version == 1
 
 
+def _xlsx_bytes(header: list[str] | None, rows: list[list]) -> bytes:
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    if header is not None:
+        ws.append(header)
+        for r in rows:
+            ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _upload(c: TestClient, bearer: str, name: str, data: bytes, mime: str) -> str:
+    r = c.post(
+        "/artifacts",
+        headers={"Authorization": f"Bearer {bearer}"},
+        files={"file": (name, io.BytesIO(data), mime)},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@pytest.mark.unit
+def test_extract_422_when_csv_has_no_data_rows(app_client) -> None:
+    """C-1: a header-only CSV yields zero data rows -> typed 422, no llm call."""
+    c, TestSession, provider = app_client
+    admin = register_admin(c, "admin@example.com")
+    bearer = admin["tokens"]["access_token"]
+    provider.register("extract.capabilities", lambda _p: LLMResponse('{"items": []}'))
+
+    sr = c.post(
+        "/tech-debt/services",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"title": "x"},
+    )
+    svc_id = sr.json()["id"]
+    artifact_id = _upload_csv(c, bearer, "empty.csv", b"Tool,Vendor,Cost\n")
+    r = c.post(
+        f"/tech-debt/services/{svc_id}/capability-lists/extract",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"artifact_id": artifact_id},
+    )
+    assert r.status_code == 422, r.text
+    assert "No data rows found" in r.json()["error"]["message"]
+    # Bailed before run_job: no llm_calls row written.
+    with TestSession() as db:
+        assert db.execute(select(LLMCall)).first() is None
+
+
+@pytest.mark.unit
+def test_extract_422_when_xlsx_sheet_empty(app_client) -> None:
+    """C-1: an XLSX whose active sheet has no rows -> typed 422."""
+    c, _, provider = app_client
+    admin = register_admin(c, "admin@example.com")
+    bearer = admin["tokens"]["access_token"]
+    provider.register("extract.capabilities", lambda _p: LLMResponse('{"items": []}'))
+
+    sr = c.post(
+        "/tech-debt/services",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"title": "x"},
+    )
+    svc_id = sr.json()["id"]
+    artifact_id = _upload(c, bearer, "empty.xlsx", _xlsx_bytes(None, []), _XLSX_MIME)
+    r = c.post(
+        f"/tech-debt/services/{svc_id}/capability-lists/extract",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"artifact_id": artifact_id},
+    )
+    assert r.status_code == 422, r.text
+    assert "No data rows found" in r.json()["error"]["message"]
+
+
+@pytest.mark.unit
+def test_extract_422_when_xlsx_is_corrupt(app_client) -> None:
+    """C-2: bytes that aren't a real zip/xlsx -> typed 422, not a 500."""
+    c, _, provider = app_client
+    admin = register_admin(c, "admin@example.com")
+    bearer = admin["tokens"]["access_token"]
+    provider.register("extract.capabilities", lambda _p: LLMResponse('{"items": []}'))
+
+    sr = c.post(
+        "/tech-debt/services",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"title": "x"},
+    )
+    svc_id = sr.json()["id"]
+    # C-6: upload sniffs magic bytes, so a valid-zip-header but junk workbook is
+    # needed to reach the extract-time CorruptInventoryError path (plain text
+    # claiming xlsx would be rejected at upload).
+    artifact_id = _upload(c, bearer, "corrupt.xlsx", b"PK\x03\x04not a real xlsx", _XLSX_MIME)
+    r = c.post(
+        f"/tech-debt/services/{svc_id}/capability-lists/extract",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"artifact_id": artifact_id},
+    )
+    assert r.status_code == 422, r.text
+
+
+@pytest.mark.unit
+def test_extract_truncates_at_max_rows_and_flags_it(app_client) -> None:
+    """C-1: a 501-row inventory -> model sees 500 rows (no sentinel), the
+    response carries truncated=true, and the sentinel never reaches the model."""
+    c, _, provider = app_client
+    admin = register_admin(c, "admin@example.com")
+    bearer = admin["tokens"]["access_token"]
+
+    captured: dict = {}
+
+    def fake(payload: dict) -> LLMResponse:
+        captured["payload"] = payload
+        rows = payload["rows"]
+        items = [{"name": f"Tool {i}", "source_row_index": i} for i in range(len(rows))]
+        return LLMResponse(content=json.dumps({"items": items}))
+
+    provider.register("extract.capabilities", fake)
+
+    sr = c.post(
+        "/tech-debt/services",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"title": "x"},
+    )
+    svc_id = sr.json()["id"]
+    csv = b"Tool\n" + b"".join(b"Row %d\n" % i for i in range(501))
+    artifact_id = _upload_csv(c, bearer, "big.csv", csv)
+
+    r = c.post(
+        f"/tech-debt/services/{svc_id}/capability-lists/extract",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"artifact_id": artifact_id},
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["truncated"] is True
+    # Model received exactly MAX_ROWS rows, with no phantom sentinel row.
+    sent = captured["payload"]["rows"]
+    assert len(sent) == 500
+    assert all("__truncated__" not in row for row in sent)
+    assert len(body["items"]) == 500
+
+
+@pytest.mark.unit
+def test_extract_not_truncated_flag_false_for_small_file(app_client) -> None:
+    c, _, provider = app_client
+    admin = register_admin(c, "admin@example.com")
+    bearer = admin["tokens"]["access_token"]
+    provider.register(
+        "extract.capabilities",
+        lambda _p: LLMResponse('{"items": [{"name": "Wiz"}]}'),
+    )
+    sr = c.post(
+        "/tech-debt/services",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"title": "x"},
+    )
+    svc_id = sr.json()["id"]
+    artifact_id = _upload_csv(c, bearer, "small.csv", b"Tool\nWiz\n")
+    r = c.post(
+        f"/tech-debt/services/{svc_id}/capability-lists/extract",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"artifact_id": artifact_id},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["truncated"] is False
+
+
 @pytest.mark.unit
 def test_extract_rejects_unknown_service(app_client) -> None:
     c, _, _ = app_client
@@ -313,9 +484,11 @@ def test_latest_capability_list_admin_only(app_client) -> None:
     c.headers["X-Client-Id"] = client["user"]["client_id"]
     a_bearer = admin["tokens"]["access_token"]
     c_bearer = client["tokens"]["access_token"]
+    # C-5: an empty item list for a non-empty inventory now 502s, so return one
+    # item to exercise the admin-vs-client read path this test cares about.
     provider.register(
         "extract.capabilities",
-        lambda _p: LLMResponse('{"items": []}'),
+        lambda _p: LLMResponse('{"items": [{"name": "Wiz"}]}'),
     )
 
     sr = c.post(
@@ -720,6 +893,174 @@ def test_client_cannot_reach_latest_deliverable(app_client) -> None:
         headers={"Authorization": f"Bearer {bearer_client}"},
     )
     assert latest.status_code == 403
+
+
+def _xlsx_multi_sheet() -> bytes:
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    cover = wb.active
+    cover.title = "Cover"
+    cover.append(["Confidential"])
+    inv = wb.create_sheet("Inventory")
+    inv.append(["Tool", "Vendor"])
+    inv.append(["Wiz", "Wiz Inc"])
+    inv.append(["Splunk", "Splunk"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+@pytest.mark.unit
+def test_extract_returns_parse_report_for_second_sheet(app_client) -> None:
+    """C-3: data on sheet 2 parses, and parse_report names the sheet used."""
+    c, _, provider = app_client
+    admin = register_admin(c, "admin@example.com")
+    bearer = admin["tokens"]["access_token"]
+
+    def fake(payload: dict) -> LLMResponse:
+        items = [{"name": r.get("Tool", "x")} for r in payload["rows"]]
+        return LLMResponse(content=json.dumps({"items": items}))
+
+    provider.register("extract.capabilities", fake)
+    sr = c.post(
+        "/tech-debt/services",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"title": "x"},
+    )
+    svc_id = sr.json()["id"]
+    artifact_id = _upload(c, bearer, "book.xlsx", _xlsx_multi_sheet(), _XLSX_MIME)
+    r = c.post(
+        f"/tech-debt/services/{svc_id}/capability-lists/extract",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"artifact_id": artifact_id},
+    )
+    assert r.status_code == 201, r.text
+    report = r.json()["parse_report"]
+    assert report["sheet_used"] == "Inventory"
+    assert report["rows_parsed"] == 2
+    assert report["truncated"] is False
+
+
+@pytest.mark.unit
+def test_extract_preserves_unparseable_cost_in_notes(app_client) -> None:
+    """C-4: an un-guessable money string is dropped to notes, not invented."""
+    c, _, provider = app_client
+    admin = register_admin(c, "admin@example.com")
+    bearer = admin["tokens"]["access_token"]
+    provider.register(
+        "extract.capabilities",
+        lambda _p: LLMResponse(
+            json.dumps({"items": [{"name": "Wiz", "annual_cost_usd": "EUR 120k"}]})
+        ),
+    )
+    sr = c.post(
+        "/tech-debt/services",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"title": "x"},
+    )
+    svc_id = sr.json()["id"]
+    artifact_id = _upload_csv(c, bearer, "x.csv", b"A\n1\n")
+    r = c.post(
+        f"/tech-debt/services/{svc_id}/capability-lists/extract",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"artifact_id": artifact_id},
+    )
+    assert r.status_code == 201, r.text
+    item = r.json()["items"][0]
+    assert item["annual_cost_usd"] is None
+    assert "cost: 'EUR 120k'" in item["notes"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "bad",
+    ['[{"name": "Wiz"}]', '{"capabilities": [{"name": "Wiz"}]}', '{"items": []}'],
+)
+def test_extract_502_on_wrong_response_shape(app_client, bad) -> None:
+    """C-5: list-shaped, wrong-key, and empty-for-nonempty all 502, no list."""
+    c, TestSession, provider = app_client
+    admin = register_admin(c, "admin@example.com")
+    bearer = admin["tokens"]["access_token"]
+    provider.register("extract.capabilities", lambda _p: LLMResponse(bad))
+    sr = c.post(
+        "/tech-debt/services",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"title": "x"},
+    )
+    svc_id = sr.json()["id"]
+    artifact_id = _upload_csv(c, bearer, "x.csv", b"A\n1\n")
+    r = c.post(
+        f"/tech-debt/services/{svc_id}/capability-lists/extract",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"artifact_id": artifact_id},
+    )
+    assert r.status_code == 502, r.text
+    # No CapabilityList row is minted on the failure path.
+    with TestSession() as db:
+        assert db.execute(select(CapabilityList)).first() is None
+
+
+class _RaisingStorage:
+    """Local-like storage whose get() raises a chosen error (C-7)."""
+
+    def __init__(self, backing: LocalFilesystemStorage, exc: Exception) -> None:
+        self._backing = backing
+        self._exc = exc
+
+    def put(self, key: str, data: bytes, *, content_type: str):
+        return self._backing.put(key, data, content_type=content_type)
+
+    def get(self, key: str) -> bytes:
+        raise self._exc
+
+    def exists(self, key: str) -> bool:
+        return self._backing.exists(key)
+
+    def signed_url(self, key: str, *, ttl_seconds: int = 600) -> str:
+        return self._backing.signed_url(key, ttl_seconds=ttl_seconds)
+
+
+def _extract_with_storage_error(app_client, exc: Exception) -> int:
+    from app.routes.artifacts import _storage_dep
+
+    c, _, provider = app_client
+    admin = register_admin(c, "admin@example.com")
+    bearer = admin["tokens"]["access_token"]
+    provider.register(
+        "extract.capabilities",
+        lambda _p: LLMResponse('{"items": [{"name": "Wiz"}]}'),
+    )
+    backing = c.app.dependency_overrides[_storage_dep]()
+    sr = c.post(
+        "/tech-debt/services",
+        headers={"Authorization": f"Bearer {bearer}"},
+        json={"title": "x"},
+    )
+    svc_id = sr.json()["id"]
+    artifact_id = _upload_csv(c, bearer, "x.csv", b"A\n1\n")
+    c.app.dependency_overrides[_storage_dep] = lambda: _RaisingStorage(backing, exc)
+    try:
+        r = c.post(
+            f"/tech-debt/services/{svc_id}/capability-lists/extract",
+            headers={"Authorization": f"Bearer {bearer}"},
+            json={"artifact_id": artifact_id},
+        )
+    finally:
+        c.app.dependency_overrides[_storage_dep] = lambda: backing
+    return r.status_code
+
+
+@pytest.mark.unit
+def test_extract_410_when_bytes_missing(app_client) -> None:
+    assert _extract_with_storage_error(app_client, FileNotFoundError("gone")) == 410
+
+
+@pytest.mark.unit
+def test_extract_503_when_storage_unavailable(app_client) -> None:
+    from app.storage import StorageUnavailableError
+
+    assert _extract_with_storage_error(app_client, StorageUnavailableError("down")) == 503
 
 
 @pytest.mark.unit

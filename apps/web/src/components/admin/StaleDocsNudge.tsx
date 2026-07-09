@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 /**
  * Work Order C3: a regenerate nudge shown when an AI run has changed scores
  * since the documents were last generated. Inline colours so it renders

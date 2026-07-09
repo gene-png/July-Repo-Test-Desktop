@@ -14,8 +14,9 @@ import { authOptions } from "@/lib/auth/options";
 
 export async function GET(
   _request: Request,
-  { params }: { params: { id: string } },
+  props: { params: Promise<{ id: string }> },
 ): Promise<NextResponse> {
+  const params = await props.params;
   const session = await getServerSession(authOptions);
   const bearer = session?.accessToken;
   if (!bearer) {
@@ -46,8 +47,9 @@ export async function GET(
 /** DELETE /api/proxy/admin/services/:id - archive a service/engagement (admin). */
 export async function DELETE(
   _request: Request,
-  { params }: { params: { id: string } },
+  props: { params: Promise<{ id: string }> },
 ): Promise<NextResponse> {
+  const params = await props.params;
   const session = await getServerSession(authOptions);
   const bearer = session?.accessToken;
   if (!bearer) {

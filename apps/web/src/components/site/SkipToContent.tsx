@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 /**
  * Skip-to-content link (Navigation_Spec §7). Must be the first focusable
  * element in every shell; visually hidden until focused. Targets the

@@ -12,11 +12,21 @@ upload at 50 MB; multi-file batch upload is the caller's responsibility
 
 from __future__ import annotations
 
+import codecs
 import re
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -28,11 +38,29 @@ from app.models.artifact import Artifact, ArtifactOrigin
 from app.models.client import Client
 from app.models.user import User, UserRole
 from app.schemas.artifact import ArtifactListResponse, ArtifactResponse
-from app.storage import StorageBackend, get_storage
+from app.storage import StorageBackend, StorageUnavailableError, get_storage
+from app.storage.base import sha256_of
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
+_UPLOAD_CHUNK_BYTES = 1024 * 1024  # 1 MB streaming reads
+
+# Magic-byte signatures used to sniff the true content type (C-6).
+_OLE2_MAGIC = b"\xd0\xcf\x11\xe0"  # legacy Office (.xls/.doc): openpyxl can't read it
+_ZIP_MAGIC = b"PK\x03\x04"  # OOXML (.xlsx/.docx) + plain .zip
+_PDF_MAGIC = b"%PDF"
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_JPEG_MAGIC = b"\xff\xd8\xff"
+
+# Claimed MIME types whose real content is a zip container.
+_ZIP_FAMILY_MIME = {
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/zip",
+}
+# Claimed MIME types we verify with a text heuristic rather than a signature.
+_TEXT_MIME = {"text/csv", "text/plain"}
 
 # Allowed MIME types for intake uploads. Phase 2 is intake-scope only;
 # Phase 3 may broaden this when the Tech Debt service ingests Excel.
@@ -40,7 +68,6 @@ ALLOWED_MIME = {
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/vnd.ms-excel",
     "application/msword",
     "text/csv",
     "text/plain",
@@ -48,6 +75,11 @@ ALLOWED_MIME = {
     "image/jpeg",
     "application/zip",
 }
+
+# Legacy OLE2 .xls: openpyxl can't read it, so the Tech Debt extractor would
+# 500 on ingest. Reject at upload with an actionable message instead of
+# silently storing an artifact that can never be parsed.
+LEGACY_XLS_MIME = "application/vnd.ms-excel"
 
 
 def _safe_title(name: str) -> str:
@@ -62,6 +94,59 @@ def _storage_dep() -> StorageBackend:
     return get_storage()
 
 
+def _looks_like_utf8_text(data: bytes) -> bool:
+    """Text heuristic for csv/plain uploads (C-6).
+
+    Decodable as UTF-8 (a BOM is fine) with no NUL bytes in the first 8 KB.
+    An incremental decoder tolerates a multibyte char split at the 8 KB
+    boundary so we don't reject a legitimate file on a byte cut.
+    """
+    chunk = data[:8192]
+    if b"\x00" in chunk:
+        return False
+    decoder = codecs.getincrementaldecoder("utf-8-sig")()
+    try:
+        decoder.decode(chunk)  # final=False: trailing partial char is OK
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def _verify_content_matches_mime(mime: str, data: bytes) -> None:
+    """Sniff the leading bytes and reject a spoofed declared type (C-6).
+
+    Raises 415 when the content is a legacy OLE2 Office file (which we can't
+    process) or when the sniffed type contradicts the claimed MIME.
+    """
+    head = data[:16]
+    if head.startswith(_OLE2_MAGIC):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Legacy .xls is not supported; re-save the file as .xlsx and upload again",
+        )
+
+    mismatch = HTTPException(
+        status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+        detail="file content does not match its declared type",
+    )
+    if mime in _ZIP_FAMILY_MIME:
+        if not head.startswith(_ZIP_MAGIC):
+            raise mismatch
+    elif mime == "application/pdf":
+        if not head.startswith(_PDF_MAGIC):
+            raise mismatch
+    elif mime == "image/png":
+        if not head.startswith(_PNG_MAGIC):
+            raise mismatch
+    elif mime == "image/jpeg":
+        if not head.startswith(_JPEG_MAGIC):
+            raise mismatch
+    elif mime in _TEXT_MIME and not _looks_like_utf8_text(data):
+        raise mismatch
+    # application/msword has no positive signature to check; a real .doc is
+    # OLE2 and was already rejected above.
+
+
 @router.post(
     "",
     response_model=ArtifactResponse,
@@ -69,6 +154,8 @@ def _storage_dep() -> StorageBackend:
     summary="Upload an artifact (intake document)",
 )
 async def upload_artifact(
+    request: Request,
+    response: Response,
     file: Annotated[UploadFile, File(description="Document to upload")],
     user: Annotated[User, Depends(current_user)],
     client: Annotated[Client, Depends(current_client)],
@@ -77,23 +164,78 @@ async def upload_artifact(
     notes: Annotated[str | None, Form()] = None,
 ) -> ArtifactResponse:
     mime = file.content_type or "application/octet-stream"
+    if mime == LEGACY_XLS_MIME:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Legacy .xls is not supported; re-save the file as .xlsx and upload again",
+        )
     if mime not in ALLOWED_MIME:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail=f"MIME type {mime!r} is not allowed for intake uploads.",
         )
 
-    data = await file.read()
+    # Content-Length pre-check (C-6): reject an obviously-oversized body before
+    # reading a single byte. The header counts multipart overhead too, so it's
+    # only a fast-fail; the streaming cap below is the authoritative limit.
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=f"File exceeds the {MAX_UPLOAD_BYTES} byte upload limit.",
+                )
+        except ValueError:
+            pass  # unparseable header; fall through to the streaming cap
+
+    # Stream the body with an incremental cap so a client can't force us to
+    # buffer more than the limit even with a lying/absent Content-Length.
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await file.read(_UPLOAD_CHUNK_BYTES):
+        total += len(chunk)
+        if total > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File exceeds the {MAX_UPLOAD_BYTES} byte upload limit.",
+            )
+        chunks.append(chunk)
+    data = b"".join(chunks)
+
     if len(data) == 0:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Uploaded file is empty.",
         )
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File exceeds the {MAX_UPLOAD_BYTES} byte upload limit.",
+
+    # Magic-byte sniff: the declared MIME must match the actual content (C-6).
+    _verify_content_matches_mime(mime, data)
+
+    # Dedup (C-8): if this client already stored an artifact with the same
+    # content hash, return that row (200) instead of writing a copy.
+    digest = sha256_of(data)
+    # first() (newest row), not scalar_one_or_none(): tenants that stored
+    # identical bytes more than once BEFORE dedup existed have several rows
+    # with this hash, and one_or_none would raise MultipleResultsFound -> 500.
+    existing = (
+        db.execute(
+            select(Artifact)
+            .where(
+                Artifact.client_id == client.id,
+                Artifact.sha256 == digest,
+            )
+            .order_by(Artifact.created_at.desc())
+            .limit(1)
         )
+        .scalars()
+        .first()
+    )
+    if existing is not None:
+        response.status_code = status.HTTP_200_OK
+        payload = ArtifactResponse.model_validate(existing, from_attributes=True)
+        payload.already_uploaded = True
+        return payload
 
     title = _safe_title(file.filename or "upload")
     key = f"client_upload/{user.id}/{uuid.uuid4()}/{title}"
@@ -216,6 +358,11 @@ def download_artifact(
             status_code=status.HTTP_410_GONE,
             detail="Artifact bytes no longer available.",
         ) from exc
+    except StorageUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="document storage is temporarily unreachable",
+        ) from exc
     return Response(
         content=data,
         media_type=row.mime_type,
@@ -259,6 +406,11 @@ def view_artifact(
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail="Artifact bytes no longer available.",
+        ) from exc
+    except StorageUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="document storage is temporarily unreachable",
         ) from exc
     # Lock down what the inline document can do: the dashboard is fully
     # self-contained (no scripts, no external assets), so a strict CSP costs

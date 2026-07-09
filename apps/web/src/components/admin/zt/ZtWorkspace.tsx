@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -36,6 +35,7 @@ import type {
 } from "@/lib/zt/types";
 
 import { MessageThread } from "@/components/messages/MessageThread";
+import { SimulatedBadge } from "@/components/admin/SimulatedBadge";
 import { StaleDocsNudge } from "@/components/admin/StaleDocsNudge";
 
 import { ZtDeliverableCard } from "./ZtDeliverableCard";
@@ -43,6 +43,8 @@ import { ZtGapList } from "./ZtGapList";
 import { ZtRoadmapCard } from "./ZtRoadmapCard";
 import { ZtQuestionnaire } from "./ZtQuestionnaire";
 import { ZtScoreCard } from "./ZtScoreCard";
+
+import type { JSX } from "react";
 
 export interface ZtWorkspaceProps {
   serviceId: string;
@@ -387,7 +389,7 @@ export function ZtWorkspace({
                     .size === 1
                     ? "y"
                     : "ies"}
-                  .
+                  . {runResult.mode === "fixture" ? <SimulatedBadge /> : null}
                 </p>
               ) : null}
             </CardBody>

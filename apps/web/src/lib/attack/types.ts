@@ -83,6 +83,8 @@ export interface AttackRunAiResponse {
   coverage: AttackCoverageRow[];
   /** Batches the AI provider couldn't reach; >0 means re-run to fill the rest. */
   failed_batches?: number;
+  /** "fixture" when the result came from deterministic demo fixtures. */
+  mode?: "fixture" | "live";
 }
 
 export interface TacticHeatmapEntry {

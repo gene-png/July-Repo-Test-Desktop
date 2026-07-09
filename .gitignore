@@ -57,6 +57,11 @@ postgres-data/
 redis-data/
 minio-data/
 keycloak-data/
+backups/
 *.db
 *.sqlite
 *.sqlite3
+_pytest_out.txt
+_run2.txt
+e2e-report/
+test-results/

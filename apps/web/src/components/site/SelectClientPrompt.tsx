@@ -1,5 +1,7 @@
 import { Card, CardBody, CardHeader, CardTitle } from "@shield/design-system";
 
+import type { JSX } from "react";
+
 export interface SelectClientPromptProps {
   /** Trailing verb phrase for the heading, e.g. "start the intake". */
   action?: string;

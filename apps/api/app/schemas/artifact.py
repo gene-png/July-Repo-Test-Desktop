@@ -23,6 +23,10 @@ class ArtifactResponse(BaseModel):
     uploaded_by: uuid.UUID
     uploaded_at: datetime
     notes: str | None
+    # True when this upload's bytes matched an artifact already stored for the
+    # same client (sha256 dedup, C-8); the existing row is returned with 200
+    # instead of storing a duplicate. New uploads leave this False and 201.
+    already_uploaded: bool = False
 
 
 class ArtifactListResponse(BaseModel):

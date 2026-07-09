@@ -56,6 +56,9 @@ class AttackAssessment(UUIDPKMixin, TimestampMixin, Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     # Work Order C3: an AI run sets this true; finalize clears it.
     documents_stale: Mapped[bool] = mapped_column(default=False, nullable=False)
+    # E-4: AI narrative output persisted from the mitre_map run — executive
+    # summary + top blind spots. NULL until a run applies them.
+    ai_summaries: Mapped[dict | None] = mapped_column(JSON().with_variant(JSONB, "postgresql"))
     status: Mapped[AttackAssessmentStatus] = mapped_column(
         SAEnum(
             AttackAssessmentStatus,

@@ -3,13 +3,22 @@ import { getServerSession } from "next-auth";
 
 import { Card, CardBody, CardHeader, CardTitle } from "@shield/design-system";
 
+import { AccountSecurity } from "@/components/auth/AccountSecurity";
 import { PublicFooter } from "@/components/site/PublicFooter";
 import { PublicHeader } from "@/components/site/PublicHeader";
 import { SignOutButton } from "@/components/site/SignOutButton";
 import { SkipToContent } from "@/components/site/SkipToContent";
+import { apiFetch } from "@/lib/api";
 import { authOptions } from "@/lib/auth/options";
 
+import type { JSX } from "react";
+
 export const metadata: Metadata = { title: "Account" };
+
+interface MeResponse {
+  mfa_enrolled: boolean;
+  email_verified_at: string | null;
+}
 
 function Row({ label, value }: { label: string; value: string }): JSX.Element {
   return (
@@ -23,6 +32,18 @@ function Row({ label, value }: { label: string; value: string }): JSX.Element {
 export default async function AccountPage(): Promise<JSX.Element> {
   const session = await getServerSession(authOptions);
   const role = session?.role ?? "—";
+
+  let me: MeResponse | null = null;
+  if (session?.accessToken) {
+    try {
+      me = await apiFetch<MeResponse>("/auth/me", {
+        bearer: session.accessToken,
+      });
+    } catch {
+      me = null;
+    }
+  }
+
   return (
     <>
       <SkipToContent />
@@ -49,6 +70,19 @@ export default async function AccountPage(): Promise<JSX.Element> {
             </div>
           </CardBody>
         </Card>
+        {me ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Security</CardTitle>
+            </CardHeader>
+            <CardBody>
+              <AccountSecurity
+                initialMfaEnrolled={me.mfa_enrolled}
+                initialEmailVerified={me.email_verified_at !== null}
+              />
+            </CardBody>
+          </Card>
+        ) : null}
       </main>
       <PublicFooter />
     </>

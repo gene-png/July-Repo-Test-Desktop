@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import { cn, EmptyState } from "@shield/design-system";
@@ -9,6 +8,8 @@ import {
   ArtifactUploadError,
   uploadArtifact,
 } from "@/lib/intake/artifacts";
+
+import type { JSX } from "react";
 
 export interface DropzoneProps {
   /** Called after each successful upload with the API's artifact row. */
@@ -20,7 +21,7 @@ export interface DropzoneProps {
 }
 
 const DEFAULT_ACCEPT =
-  ".pdf,.docx,.doc,.xlsx,.xls,.csv,.txt,.png,.jpg,.jpeg,.zip,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,application/vnd.ms-excel,text/csv,text/plain,image/png,image/jpeg,application/zip";
+  ".pdf,.docx,.doc,.xlsx,.csv,.txt,.png,.jpg,.jpeg,.zip,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,text/csv,text/plain,image/png,image/jpeg,application/zip";
 
 interface UploadingItem {
   id: string;

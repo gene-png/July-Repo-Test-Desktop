@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -13,6 +12,8 @@ import {
 
 import { CsfProxyError, finalizeCsfDeliverable } from "@/lib/csf/client";
 import type { CsfAssessmentStatus, CsfDeliverable } from "@/lib/csf/types";
+
+import type { JSX } from "react";
 
 export interface CsfDeliverableCardProps {
   serviceId: string;

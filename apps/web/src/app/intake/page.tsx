@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 
 import { IntakeWizard } from "@/components/intake/IntakeWizard";
 
+import type { JSX } from "react";
+
 export const metadata: Metadata = {
   title: "Intake",
 };

@@ -15,8 +15,9 @@ const BASE_URL = process.env.API_BASE_URL ?? "http://api:8000";
 
 export async function GET(
   _request: Request,
-  { params }: { params: { id: string } },
+  props: { params: Promise<{ id: string }> },
 ): Promise<Response> {
+  const params = await props.params;
   const session = await getServerSession(authOptions);
   const token = session?.accessToken;
   if (!token) {
@@ -30,7 +31,7 @@ export async function GET(
   const reqHeaders: Record<string, string> = {
     Authorization: `Bearer ${token}`,
   };
-  const activeClient = cookies().get(ACTIVE_CLIENT_COOKIE)?.value;
+  const activeClient = (await cookies()).get(ACTIVE_CLIENT_COOKIE)?.value;
   if (activeClient) {
     reqHeaders["X-Client-Id"] = activeClient;
   }

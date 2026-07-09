@@ -220,6 +220,8 @@ export interface CsfDimensionChange {
 export interface CsfRunAiResponse {
   changed: CsfDimensionChange[];
   rows: CsfDimensionScore[];
+  /** "fixture" when the result came from deterministic demo fixtures. */
+  mode?: "fixture" | "live";
 }
 
 export interface ExportedArtifact {

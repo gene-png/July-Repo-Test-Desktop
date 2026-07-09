@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -39,6 +38,9 @@ import { DispositionLegend } from "./DispositionLegend";
 import { EditableCapabilityTable } from "./EditableCapabilityTable";
 import { IntakeDocumentsPanel } from "./IntakeDocumentsPanel";
 import { OverlapDashboard } from "./OverlapDashboard";
+import { SimulatedBadge } from "./SimulatedBadge";
+
+import type { JSX } from "react";
 
 export interface TechDebtWorkspaceProps {
   serviceId: string;
@@ -233,7 +235,7 @@ export function TechDebtWorkspace({
               setDocsReloadKey((k) => k + 1);
               void runExtraction(a.id);
             }}
-            accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+            accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           />
           {extracting ? (
             <p className="text-sm text-ink-tertiary" aria-live="polite">
@@ -296,6 +298,7 @@ export function TechDebtWorkspace({
             </h2>
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <StatusPill tone="info">{list.items.length} items</StatusPill>
+              {list.mode === "fixture" ? <SimulatedBadge /> : null}
               <StatusPill tone={lowConfidence === 0 ? "success" : "warning"}>
                 {lowConfidence === 0
                   ? "All rows ≥ 70% confident"

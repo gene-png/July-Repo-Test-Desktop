@@ -14,6 +14,13 @@ os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://test:test@localhost:
 # Tests override the DB session per-test; the startup maintenance job (bootstrap
 # admin + retention purge) would otherwise hit the module-level engine.
 os.environ.setdefault("SHIELD_RUN_STARTUP_MAINTENANCE", "false")
+# H-2: disable rate limiting by default in the suite. Several existing tests
+# intentionally hammer an endpoint (e.g. the login-lockout test fires 10+
+# attempts against /auth/login), which the per-IP limiter would otherwise
+# convert into 429s. The dedicated rate-limit tests re-enable limits on their
+# own per-app state (app.state.rate_limit_*), so coverage is preserved.
+os.environ.setdefault("SHIELD_RATE_LIMIT_AUTH_PER_MIN", "0")
+os.environ.setdefault("SHIELD_RATE_LIMIT_AI_PER_MIN", "0")
 
 
 @pytest.fixture()

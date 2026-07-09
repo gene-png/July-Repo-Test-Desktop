@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.csf_action_item import CsfActionStatus
 from app.models.csf_assessment import CsfAssessmentStatus
 from app.models.service import ServiceKind, ServiceStatus
 
@@ -303,6 +304,8 @@ class CsfRunAiResponse(BaseModel):
 
     changed: list[CsfDimensionChange]
     rows: list[CsfDimensionScoreResponse]
+    # E-5: "fixture" (simulated) or "live" so the UI can badge simulated output.
+    mode: str = "fixture"
 
 
 class ExportedArtifact(BaseModel):
@@ -317,3 +320,41 @@ class CsfPlaybookExportResponse(BaseModel):
     full playbook, each as a downloadable file (Work Order D4)."""
 
     artifacts: list[ExportedArtifact]
+
+
+# ---------------------------------------------------------------------------
+# Action plan (H-8) — admin-managed remediation tasks
+# ---------------------------------------------------------------------------
+
+
+class CsfActionItemCreate(BaseModel):
+    """Create a remediation action item, typically from a gap row."""
+
+    subcategory_code: str = Field(min_length=1, max_length=16)
+    owner: str | None = Field(default=None, max_length=255)
+    due_date: date | None = None
+    milestone: str | None = Field(default=None, max_length=8000)
+    status: CsfActionStatus = CsfActionStatus.OPEN
+
+
+class CsfActionItemPatch(BaseModel):
+    """Partial update. Only supplied fields change."""
+
+    owner: str | None = Field(default=None, max_length=255)
+    due_date: date | None = None
+    milestone: str | None = Field(default=None, max_length=8000)
+    status: CsfActionStatus | None = None
+
+
+class CsfActionItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    assessment_id: uuid.UUID
+    subcategory_code: str
+    owner: str | None
+    due_date: date | None
+    milestone: str | None
+    status: CsfActionStatus
+    created_at: datetime
+    updated_at: datetime

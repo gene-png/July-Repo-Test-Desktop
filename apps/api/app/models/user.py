@@ -57,6 +57,12 @@ class User(UUIDPKMixin, TimestampMixin, Base):
     # references actor_user_id; purging scrubs PII instead of deleting the row.
     purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     mfa_enrolled: Mapped[bool] = mapped_column(default=False, nullable=False)
+    # Base32 TOTP seed (RFC 6238). Set at /auth/mfa/enroll before the user has
+    # proven possession; mfa_enrolled only flips true once /auth/mfa/activate
+    # verifies a live code. Cleared on /auth/mfa/disable. Never surfaced by any
+    # response schema.
+    mfa_secret: Mapped[str | None] = mapped_column(String(64))
+    mfa_enrolled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

@@ -1,6 +1,7 @@
 "use client";
-
 import * as React from "react";
+
+import type { JSX } from "react";
 
 const TIER_SHORT_LABELS = [
   { tier: 1, label: "Partial" },

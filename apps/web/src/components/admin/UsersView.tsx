@@ -1,5 +1,4 @@
 "use client";
-
 import * as React from "react";
 
 import {
@@ -19,6 +18,8 @@ import {
   type ClientSummary,
 } from "@/lib/admin/client";
 import type { AdminUserDetail } from "@/lib/admin/types";
+
+import type { JSX } from "react";
 
 export function UsersView(): JSX.Element {
   const [users, setUsers] = React.useState<AdminUserDetail[] | null>(null);

@@ -15,13 +15,53 @@ import type {
  * the wire to the browser.
  */
 
+/** Friendly, user-facing copy per status when the payload has no typed message. */
+function genericProxyMessage(status: number): string {
+  if (status === 401) return "Please sign in and try again.";
+  if (status === 403) return "You don't have access to do that.";
+  if (status === 404) return "We couldn't find that.";
+  if (status === 409)
+    return "That conflicts with the current state — reload and try again.";
+  if (status === 422)
+    return "Some details need attention before we can continue.";
+  if (status >= 500)
+    return "Something went wrong on our end. Please try again.";
+  return `Request failed (${status}).`;
+}
+
+/** Prefer the API's typed message ({error.message} or {detail}) over a generic. */
+function proxyMessage(status: number, payload: unknown): string {
+  const p = payload as
+    | { error?: { message?: string }; detail?: unknown }
+    | undefined;
+  const typed =
+    p?.error?.message ?? (typeof p?.detail === "string" ? p.detail : undefined);
+  return typed && typed.trim().length > 0 ? typed : genericProxyMessage(status);
+}
+
 class ProxyError extends Error {
   constructor(
     public readonly status: number,
     public readonly payload: unknown,
   ) {
-    super(`Intake proxy ${status}`);
+    // Surface the API's typed detail (e.g. the incomplete-intake message)
+    // instead of the raw "Intake proxy <status>" placeholder.
+    super(proxyMessage(status, payload));
   }
+}
+
+/** True when the failure is the "complete intake first" guard from the API. */
+export function isIncompleteIntakeError(err: unknown): boolean {
+  if (!(err instanceof ProxyError)) return false;
+  // The API wraps HTTPException detail as {error: {message}}; some callers
+  // may see a raw {detail} instead. Accept either, like proxyMessage does.
+  const p = err.payload as
+    | { detail?: unknown; error?: { message?: unknown } }
+    | undefined;
+  const text =
+    (typeof p?.error?.message === "string" ? p.error.message : "") ||
+    (typeof p?.detail === "string" ? p.detail : "");
+  return err.status === 422 && /intake/i.test(text);
 }
 
 export async function fetchIntake(): Promise<IntakeStateResponse> {

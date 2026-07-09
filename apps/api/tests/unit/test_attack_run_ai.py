@@ -83,6 +83,109 @@ def _seed_tech_debt_tools(TestSession: sessionmaker, cid: str, user_id, tools: l
         db.commit()
 
 
+def _seed_tech_debt_service(TestSession: sessionmaker, cid: str, user_id) -> str:
+    import uuid as _uuid
+
+    with TestSession() as db:
+        svc = Service(
+            kind=ServiceKind.TECH_DEBT,
+            status=ServiceStatus.IN_PROGRESS,
+            title="Acme Tech Debt",
+            client_id=_uuid.UUID(cid),
+            opened_by=_uuid.UUID(user_id),
+        )
+        db.add(svc)
+        db.commit()
+        return str(svc.id)
+
+
+def _add_capability_list(
+    TestSession: sessionmaker,
+    service_id: str,
+    version: int,
+    status: CapabilityListStatus,
+    tools: list[str],
+) -> None:
+    import uuid as _uuid
+
+    with TestSession() as db:
+        cl = CapabilityList(service_id=_uuid.UUID(service_id), version=version, status=status)
+        db.add(cl)
+        db.flush()
+        for name in tools:
+            db.add(CapabilityItem(capability_list_id=cl.id, name=name))
+        db.commit()
+
+
+@pytest.mark.unit
+def test_run_ai_warns_when_no_approved_capability_list(app_client) -> None:
+    """G-2: a client whose only capability list is DRAFT has an empty tool
+    universe; run-ai returns a warning and cites no tools."""
+    c, TestSession, provider = app_client
+    bearer, cid = _admin(c)
+    me = c.get("/auth/me", headers={"Authorization": f"Bearer {bearer}"}).json()
+    svc_id_td = _seed_tech_debt_service(TestSession, cid, me["id"])
+    _add_capability_list(
+        TestSession, svc_id_td, 1, CapabilityListStatus.DRAFT, ["CrowdStrike Falcon"]
+    )
+
+    h = {"Authorization": f"Bearer {bearer}", "X-Client-Id": cid}
+    svc = c.post("/attack/services", headers=h, json={"kind": "attack_coverage", "title": "Acme"})
+    svc_id = svc.json()["id"]
+    a = c.post(f"/attack/services/{svc_id}/assessments", headers=h)
+    code = a.json()["coverage"][0]["technique_code"]
+
+    provider.register_static(
+        "mitre_map",
+        LLMResponse(
+            '{"techniques": [{"technique_code": "' + code + '", "status": "covered",'
+            ' "detection_tools": ["CrowdStrike Falcon"]}]}'
+        ),
+    )
+    r = c.post(f"/attack/services/{svc_id}/run-ai", headers=h)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["tools_available"] == 0
+    assert "no approved capability list; mapping will cite no tools" in body["warnings"]
+    # The draft tool must not survive validation.
+    row = next(t for t in body["coverage"] if t["technique_code"] == code)
+    assert row["detection_tools"] == []
+
+
+@pytest.mark.unit
+def test_run_ai_uses_latest_approved_version_only(app_client) -> None:
+    """G-2: an approved v2 supersedes v1; v1-only tools are excluded from the
+    universe and get dropped during validation."""
+    c, TestSession, provider = app_client
+    bearer, cid = _admin(c)
+    me = c.get("/auth/me", headers={"Authorization": f"Bearer {bearer}"}).json()
+    svc_id_td = _seed_tech_debt_service(TestSession, cid, me["id"])
+    _add_capability_list(TestSession, svc_id_td, 1, CapabilityListStatus.APPROVED, ["OldTool"])
+    _add_capability_list(TestSession, svc_id_td, 2, CapabilityListStatus.APPROVED, ["NewTool"])
+
+    h = {"Authorization": f"Bearer {bearer}", "X-Client-Id": cid}
+    svc = c.post("/attack/services", headers=h, json={"kind": "attack_coverage", "title": "Acme"})
+    svc_id = svc.json()["id"]
+    a = c.post(f"/attack/services/{svc_id}/assessments", headers=h)
+    code = a.json()["coverage"][0]["technique_code"]
+
+    provider.register_static(
+        "mitre_map",
+        LLMResponse(
+            '{"techniques": [{"technique_code": "' + code + '", "status": "covered",'
+            ' "detection_tools": ["OldTool", "NewTool"]}]}'
+        ),
+    )
+    r = c.post(f"/attack/services/{svc_id}/run-ai", headers=h)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # Only v2's tool universe counts.
+    assert body["tools_available"] == 1
+    assert body["warnings"] == []
+    row = next(t for t in body["coverage"] if t["technique_code"] == code)
+    assert row["detection_tools"] == ["NewTool"]
+
+
 @pytest.mark.unit
 def test_run_ai_applies_validated_dpr_and_reports_changes(app_client) -> None:
     c, TestSession, provider = app_client

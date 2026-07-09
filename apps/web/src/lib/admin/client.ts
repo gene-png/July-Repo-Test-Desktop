@@ -1,9 +1,11 @@
 "use client";
 
 import type {
+  AdminAuditListResponse,
   AdminIntakeQueueResponse,
   AdminServiceRow,
   AdminUserDetail,
+  AuditFilters,
   FulfillServiceRequestResponse,
 } from "./types";
 
@@ -168,4 +170,40 @@ export async function archiveService(id: string): Promise<void> {
     method: "DELETE",
   });
   if (!res.ok) throw new Error(await _detail(res));
+}
+
+// --- Audit log (H-7) --------------------------------------------------------
+
+/** Serialize filter state into the audit endpoint's query string. */
+export function auditQueryString(
+  filters: AuditFilters,
+  extra?: Record<string, string>,
+): string {
+  const params = new URLSearchParams();
+  if (filters.client_id) params.set("client_id", filters.client_id);
+  if (filters.action) params.set("action", filters.action);
+  if (filters.actor_user_id) params.set("actor_user_id", filters.actor_user_id);
+  if (filters.date_from) params.set("date_from", filters.date_from);
+  if (filters.date_to) params.set("date_to", filters.date_to);
+  if (filters.limit != null) params.set("limit", String(filters.limit));
+  if (filters.offset != null) params.set("offset", String(filters.offset));
+  for (const [k, v] of Object.entries(extra ?? {})) params.set(k, v);
+  return params.toString();
+}
+
+export async function fetchAuditLog(
+  filters: AuditFilters,
+): Promise<AdminAuditListResponse> {
+  const qs = auditQueryString(filters);
+  const res = await fetch(`/api/proxy/admin/audit?${qs}`, {
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(await _detail(res));
+  return (await res.json()) as AdminAuditListResponse;
+}
+
+/** Href for the CSV download honoring the current filters. */
+export function auditCsvHref(filters: AuditFilters): string {
+  const qs = auditQueryString(filters, { format: "csv" });
+  return `/api/proxy/admin/audit?${qs}`;
 }
