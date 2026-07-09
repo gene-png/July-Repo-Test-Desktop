@@ -28,6 +28,14 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class LogoutRequest(BaseModel):
+    """Optional logout body (D-017): presenting the refresh token lets the
+    server revoke exactly that session family; omitting it revokes all of
+    the user's active refresh tokens."""
+
+    refresh_token: str | None = None
+
+
 class TokenPairResponse(BaseModel):
     access_token: str
     refresh_token: str

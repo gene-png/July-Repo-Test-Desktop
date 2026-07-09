@@ -195,3 +195,11 @@ JWT access-token TTL and account lockout only.
 control. Refresh-token rotation is named first because idle/forced-reauth
 enforcement is not meaningful without server-side session invalidation.
 **Ref:** Master Spec §2 (MFA deferred), §4.5 (session security); remediation H-1.
+
+**Update (2026-07-09, later the same day):** items 1-3 of the package landed
+(migration `0037_refresh_tokens`, `routes/auth.py`). Refresh tokens now rotate
+on every use with server-side records; reusing a rotated token revokes the
+whole session family; logout revokes server-side; idle timeout and forced
+re-auth are enforced on `/auth/refresh` via `SHIELD_IDLE_TIMEOUT_SECONDS` /
+`SHIELD_FORCED_REAUTH_SECONDS` (0 disables). The RESERVED annotations were
+removed everywhere. Remaining scope: MFA (TOTP) and email verification.

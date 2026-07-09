@@ -4,7 +4,7 @@
 
 ## What the realm provides
 
-- **Realm:** `shield`. SSO session idle = 30 min, max = 24 h (mirrors the intended values of `SHIELD_IDLE_TIMEOUT_SECONDS` and `SHIELD_FORCED_REAUTH_SECONDS`). NOTE: for v1 the API issues its own JWTs and does **not** consume Keycloak tokens (see "v1 vs v1.x federation" below), so this realm's idle/max-session enforcement is **not active** on the live login path; the two SHIELD env vars are likewise loaded-but-unenforced and reserved for the MFA work package (see `DECISIONS.md` D-017).
+- **Realm:** `shield`. SSO session idle = 30 min, max = 24 h (mirrors the intended values of `SHIELD_IDLE_TIMEOUT_SECONDS` and `SHIELD_FORCED_REAUTH_SECONDS`). NOTE: for v1 the API issues its own JWTs and does **not** consume Keycloak tokens (see "v1 vs v1.x federation" below), so this realm's idle/max-session enforcement is **not active** on the live login path; the two SHIELD env vars are enforced by the API itself on `/auth/refresh` (D-017 auth package: rotation, revocation, idle timeout, forced re-auth); when v1.x federates through Keycloak, this realm's settings take over that role.
 - **Realm roles:** `admin` (Kentro consultant), `reviewer` (read-only auditor), `client` (default).
 - **Clients:**
   - `shield-web` — public OIDC client with PKCE (S256). Maps realm roles into the access token as `roles` and includes `shield-api` in the `aud` claim so the API can validate without an extra lookup.

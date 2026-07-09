@@ -32,6 +32,7 @@ from app.models.llm_call import LLMCall, LLMCallMode, LLMCallStatus
 from app.models.message import Message
 from app.models.notification import Notification
 from app.models.questionnaire import Question
+from app.models.refresh_token import RefreshToken
 from app.models.risk_register import RiskEntry, RiskRegister
 from app.models.service import Service, ServiceKind, ServiceStatus
 from app.models.service_request import ServiceRequest, ServiceType
@@ -68,6 +69,7 @@ __all__ = [
     "Message",
     "Notification",
     "Question",
+    "RefreshToken",
     "RiskEntry",
     "RiskRegister",
     "Service",

@@ -1,8 +1,10 @@
-"""H-1 / H-4 documentation-truth greps.
+"""H-1 / H-4 / D-017 documentation-truth greps.
 
-These assert that the corrected compensating-control claims are present and the
-old inaccurate phrasing is gone. Kept deliberately narrow and stable: the anchor
-assertion is the literal string "not yet enforced" in both docs.
+Originally these asserted the retraction ("planned, not yet enforced"). The
+D-017 auth package then landed (refresh rotation, revocation, idle timeout,
+forced re-auth), so the docs must now claim the controls as ENFORCED and the
+retraction phrasing must be gone. Anchor assertion: "enforced" appears in the
+session-control claims and "not yet enforced" appears nowhere.
 """
 
 from __future__ import annotations
@@ -17,32 +19,41 @@ BUILD_REPORT = REPO_ROOT / "BUILD_REPORT.md"
 
 
 @pytest.mark.unit
-def test_readme_and_build_report_state_controls_not_yet_enforced() -> None:
+def test_readme_and_build_report_state_controls_enforced() -> None:
     readme = README.read_text(encoding="utf-8")
     build_report = BUILD_REPORT.read_text(encoding="utf-8")
 
-    # Anchor assertion (narrow + stable): both docs say the deferred session
-    # controls are not yet enforced.
-    assert "not yet enforced" in readme.lower()
-    assert "not yet enforced" in build_report.lower()
+    # The retraction phrasing is gone from both docs.
+    assert "not yet enforced" not in readme.lower()
+    assert "not yet enforced" not in build_report.lower()
 
-    # Both describe the deferred controls as PLANNED.
-    assert "planned" in readme.lower()
-    assert "planned" in build_report.lower()
+    # Both claim rotation and the session limits as enforced, tied to D-017.
+    assert "rotation" in readme.lower()
+    assert "enforced" in readme.lower()
+    assert "d-017" in readme.lower()
+    assert "rotation" in build_report.lower()
+    assert "enforced" in build_report.lower()
 
 
 @pytest.mark.unit
-def test_docs_do_not_claim_idle_timeout_forced_reauth_are_active() -> None:
+def test_session_flags_documented_as_active_controls() -> None:
     readme = README.read_text(encoding="utf-8")
-    # The old, false compensating-control sentence claimed these as live
-    # controls. It must be gone.
-    assert "30-minute idle timeout, daily forced re-auth" not in readme
-    # The flag names must not be presented without the reserved/not-enforced
-    # caveat: wherever they appear, "reserved" or "not yet enforced" is nearby.
     for flag in ("SHIELD_IDLE_TIMEOUT_SECONDS", "SHIELD_FORCED_REAUTH_SECONDS"):
         assert flag in readme  # documented at all
-    lowered = readme.lower()
-    assert "reserved" in lowered or "not yet enforced" in lowered
+    # No surface still marks them reserved/unimplemented.
+    for path in (README, REPO_ROOT / ".env.example", REPO_ROOT / "docker-compose.yml"):
+        text = path.read_text(encoding="utf-8").lower()
+        assert "reserved / unimplemented" not in text, path
+        assert "unimplemented" not in text, path
+
+
+@pytest.mark.unit
+def test_decision_log_records_the_landing() -> None:
+    decisions = (REPO_ROOT / "DECISIONS.md").read_text(encoding="utf-8")
+    assert "D-017" in decisions
+    # The landing note exists and names the remaining scope.
+    assert "0037_refresh_tokens" in decisions
+    assert "MFA (TOTP)" in decisions
 
 
 @pytest.mark.unit

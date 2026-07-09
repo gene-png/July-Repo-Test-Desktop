@@ -109,13 +109,17 @@ class Settings(BaseSettings):
     jwt_refresh_ttl_seconds: int = Field(default=1800, ge=300)
     shield_account_lockout_max_attempts: int = Field(default=10, ge=1)
     shield_account_lockout_window_seconds: int = Field(default=900, ge=60)
-    # RESERVED / UNIMPLEMENTED (H-1): these two are loaded here but NOT enforced
-    # anywhere in v1 — no idle-timeout or forced-reauth check reads them. They are
-    # PLANNED for the MFA work package (see DECISIONS.md D-017), whose first item
-    # is refresh-token rotation + revocation. Kept so the values are pinnable
-    # ahead of that work; do not present them as active session controls.
-    shield_idle_timeout_seconds: int = Field(default=1800, ge=60)
-    shield_forced_reauth_seconds: int = Field(default=86400, ge=300)
+    # ENFORCED session controls (D-017 auth package, July 9 2026): checked
+    # server-side on /auth/refresh against the rotation records in
+    # refresh_tokens. Idle timeout bounds the gap between refreshes; forced
+    # re-auth caps a session family's total age. 0 disables either control.
+    shield_idle_timeout_seconds: int = Field(default=1800, ge=0)
+    shield_forced_reauth_seconds: int = Field(default=86400, ge=0)
+    # Reuse of a rotated refresh token within this window 401s WITHOUT killing
+    # the session family: concurrent server-side renders (NextAuth) can race a
+    # rotation benignly. Outside the window, reuse is treated as theft and the
+    # family is revoked. 0 = strict (every reuse kills the family).
+    shield_refresh_reuse_grace_seconds: int = Field(default=30, ge=0)
 
     # JWT signing
     jwt_signing_secret: str = (

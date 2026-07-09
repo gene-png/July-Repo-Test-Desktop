@@ -112,20 +112,20 @@ note. `scripts/restore.sh` restores a backup dir into a target `DATABASE_URL`.
 
 Every variable in [`.env.example`](.env.example) is required. Summary:
 
-| Group               | Vars                                                                                                      | Notes                                                                                           |
-| ------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Runtime             | `ENVIRONMENT`, `LOG_LEVEL`                                                                                |                                                                                                 |
-| Database            | `DATABASE_URL`                                                                                            | Postgres 16, locked in Master Spec §2                                                           |
-| Redis               | `REDIS_URL`                                                                                               | Rate-limiter buckets + ephemeral cache (no Celery/queue in v1)                                  |
-| Object storage      | `S3_ENDPOINT_URL`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_KMS_KEY_ID`                         | MinIO in dev, S3+KMS in prod                                                                    |
-| OIDC                | `KEYCLOAK_ISSUER`, `KEYCLOAK_AUDIENCE`, `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_ADMIN`, `KEYCLOAK_ADMIN_PASSWORD` |                                                                                                 |
-| NextAuth            | `NEXTAUTH_URL`, `NEXTAUTH_SECRET`                                                                         | Generate secret with `openssl rand -hex 32`                                                     |
-| LLM                 | `SHIELD_LLM_PROVIDER`, `SHIELD_LLM_MODEL`, `SHIELD_LLM_MODE`, `ANTHROPIC_API_KEY`                         | `MODE=fixture` for offline tests                                                                |
-| Feature flags       | `SHIELD_AUTH_REQUIRE_MFA`, `SHIELD_AUTH_REQUIRE_EMAIL_VERIFY`, `SHIELD_EMAIL_DELIVERY_ENABLED`            | All `false` for v1                                                                              |
-| Redaction           | `SHIELD_REDACTION_MODE`                                                                                   | `strict` in prod; `off` forbidden outside dev                                                   |
-| Sessions            | `JWT_ACCESS_TTL_SECONDS`, `JWT_REFRESH_TTL_SECONDS`, `SHIELD_ACCOUNT_LOCKOUT_*`                           | Enforced session controls (JWT TTL + lockout)                                                   |
-| Sessions (reserved) | `SHIELD_IDLE_TIMEOUT_SECONDS`, `SHIELD_FORCED_REAUTH_SECONDS`                                             | RESERVED / UNIMPLEMENTED — loaded but **not yet enforced**; planned for the MFA package (D-017) |
-| Mail                | `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`                                                                     | MailHog locally                                                                                 |
+| Group             | Vars                                                                                                      | Notes                                                                       |
+| ----------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Runtime           | `ENVIRONMENT`, `LOG_LEVEL`                                                                                |                                                                             |
+| Database          | `DATABASE_URL`                                                                                            | Postgres 16, locked in Master Spec §2                                       |
+| Redis             | `REDIS_URL`                                                                                               | Rate-limiter buckets + ephemeral cache (no Celery/queue in v1)              |
+| Object storage    | `S3_ENDPOINT_URL`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_KMS_KEY_ID`                         | MinIO in dev, S3+KMS in prod                                                |
+| OIDC              | `KEYCLOAK_ISSUER`, `KEYCLOAK_AUDIENCE`, `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_ADMIN`, `KEYCLOAK_ADMIN_PASSWORD` |                                                                             |
+| NextAuth          | `NEXTAUTH_URL`, `NEXTAUTH_SECRET`                                                                         | Generate secret with `openssl rand -hex 32`                                 |
+| LLM               | `SHIELD_LLM_PROVIDER`, `SHIELD_LLM_MODEL`, `SHIELD_LLM_MODE`, `ANTHROPIC_API_KEY`                         | `MODE=fixture` for offline tests                                            |
+| Feature flags     | `SHIELD_AUTH_REQUIRE_MFA`, `SHIELD_AUTH_REQUIRE_EMAIL_VERIFY`, `SHIELD_EMAIL_DELIVERY_ENABLED`            | All `false` for v1                                                          |
+| Redaction         | `SHIELD_REDACTION_MODE`                                                                                   | `strict` in prod; `off` forbidden outside dev                               |
+| Sessions          | `JWT_ACCESS_TTL_SECONDS`, `JWT_REFRESH_TTL_SECONDS`, `SHIELD_ACCOUNT_LOCKOUT_*`                           | Enforced session controls (JWT TTL + lockout)                               |
+| Sessions (limits) | `SHIELD_IDLE_TIMEOUT_SECONDS`, `SHIELD_FORCED_REAUTH_SECONDS`                                             | Enforced on `/auth/refresh` (D-017): idle gap + max session age; 0 disables |
+| Mail              | `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`                                                                     | MailHog locally                                                             |
 
 ## Running tests
 
@@ -161,7 +161,7 @@ docker compose run --rm e2e pnpm a11y
 Per Master Spec §2, two risks are explicitly accepted for v1:
 
 1. **Commercial LLM provider may not be FedRAMP-authorized.** Egress may leave the FedRAMP boundary. Mandatory PII redaction (`apps/api/app/ai/redact.py`) is the primary control. See [`docs/security.md`](docs/security.md).
-2. **MFA and email verification deferred for v1.** Compensating controls **enforced today**: 15-minute JWT access-token lifetime and account lockout after 10 failed attempts in 15 minutes. **Planned, not yet enforced:** idle timeout, forced re-auth, and refresh-token rotation. `SHIELD_IDLE_TIMEOUT_SECONDS` and `SHIELD_FORCED_REAUTH_SECONDS` are loaded by config but read by no enforcement path — they are reserved for the MFA work package and are **not** active controls yet (see `DECISIONS.md` D-017). Feature flags (`SHIELD_AUTH_REQUIRE_MFA`, `SHIELD_AUTH_REQUIRE_EMAIL_VERIFY`) toggle MFA/email-verify enrollment when that package lands.
+2. **MFA and email verification deferred for v1.** Compensating controls **enforced today**: 15-minute JWT access-token lifetime and account lockout after 10 failed attempts in 15 minutes. **Also enforced (D-017 auth package, July 2026):** refresh-token rotation with reuse detection (replaying a rotated token revokes the whole session family), server-side revocation on logout, idle timeout (`SHIELD_IDLE_TIMEOUT_SECONDS`), and forced re-auth (`SHIELD_FORCED_REAUTH_SECONDS`), all checked on `/auth/refresh` against the `refresh_tokens` records. MFA itself remains future work (see `DECISIONS.md` D-017). Feature flags (`SHIELD_AUTH_REQUIRE_MFA`, `SHIELD_AUTH_REQUIRE_EMAIL_VERIFY`) toggle MFA/email-verify enrollment when that package lands.
 
 ## License
 

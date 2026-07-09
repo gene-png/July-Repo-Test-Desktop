@@ -29,9 +29,8 @@ x-api-env: &api-env
   JWT_REFRESH_TTL_SECONDS: ${JWT_REFRESH_TTL_SECONDS:-1800}
   SHIELD_ACCOUNT_LOCKOUT_MAX_ATTEMPTS: ${SHIELD_ACCOUNT_LOCKOUT_MAX_ATTEMPTS:-10}
   SHIELD_ACCOUNT_LOCKOUT_WINDOW_SECONDS: ${SHIELD_ACCOUNT_LOCKOUT_WINDOW_SECONDS:-900}
-  # RESERVED / UNIMPLEMENTED (H-1): loaded by config.py but NOT enforced anywhere
-  # in v1. Idle timeout + forced re-auth are PLANNED for the MFA work package (see
-  # DECISIONS.md D-017). Present so the values are pinnable ahead of that work.
+  # ENFORCED session limits (D-017 auth package): idle gap between refreshes
+  # and max session-family age, checked server-side on /auth/refresh. 0 disables.
   SHIELD_IDLE_TIMEOUT_SECONDS: ${SHIELD_IDLE_TIMEOUT_SECONDS:-1800}
   SHIELD_FORCED_REAUTH_SECONDS: ${SHIELD_FORCED_REAUTH_SECONDS:-86400}
   # Seed-data location inside the container. parents[3] would climb above /app,

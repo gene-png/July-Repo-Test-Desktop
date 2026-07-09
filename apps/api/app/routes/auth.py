@@ -19,6 +19,7 @@ creates a brand-new org (first person on a work domain, or a personal mailbox).
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
@@ -34,9 +35,11 @@ from app.middleware.ratelimit import rate_limit_ip
 from app.models._common import utcnow
 from app.models.client import Client
 from app.models.client_domain import ClientDomain
+from app.models.refresh_token import RefreshToken
 from app.models.user import User, UserRole
 from app.schemas.auth import (
     LoginRequest,
+    LogoutRequest,
     RefreshRequest,
     RegisterRequest,
     RegisterResponse,
@@ -71,17 +74,69 @@ def _normalize_email(raw: str) -> str:
     return raw.strip().lower()
 
 
-def _issue_pair(user: User) -> TokenPairResponse:
+def _issue_pair_with_record(
+    user: User, db: Session, *, family_id: uuid.UUID | None = None
+) -> tuple[TokenPairResponse, RefreshToken]:
+    """Issue an access+refresh pair and persist the refresh-token record.
+
+    D-017: refresh tokens are server-tracked for rotation and revocation.
+    `family_id=None` starts a new session family (login/register); rotation
+    passes the existing family through. The caller commits.
+    """
     access_token, access_payload = issue_token(subject=user.id, role=user.role.value, typ="access")
     refresh_token, refresh_payload = issue_token(
         subject=user.id, role=user.role.value, typ="refresh"
     )
-    return TokenPairResponse(
+    record = RefreshToken(
+        jti=refresh_payload.jti,
+        user_id=user.id,
+        family_id=family_id or uuid.uuid4(),
+        issued_at=utcnow(),
+        expires_at=refresh_payload.exp,
+    )
+    db.add(record)
+    db.flush()
+    pair = TokenPairResponse(
         access_token=access_token,
         refresh_token=refresh_token,
         access_expires_at=access_payload.exp,
         refresh_expires_at=refresh_payload.exp,
     )
+    return pair, record
+
+
+def _issue_pair(
+    user: User, db: Session, *, family_id: uuid.UUID | None = None
+) -> TokenPairResponse:
+    pair, _record = _issue_pair_with_record(user, db, family_id=family_id)
+    return pair
+
+
+def _revoke_family(db: Session, family_id: uuid.UUID) -> int:
+    """Revoke every active token in a session family; returns the count."""
+    now = utcnow()
+    rows = (
+        db.execute(
+            select(RefreshToken).where(
+                RefreshToken.family_id == family_id,
+                RefreshToken.revoked_at.is_(None),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for row in rows:
+        row.revoked_at = now
+    db.flush()
+    return len(rows)
+
+
+def _refresh_reject(db: Session, family_id: uuid.UUID | None, message: str) -> HTTPException:
+    """Revoke the family (when known) and build the 401 for a refused refresh."""
+    if family_id is not None:
+        _revoke_family(db, family_id)
+        db.commit()
+    return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=message)
 
 
 def _as_aware(dt: datetime | None) -> datetime | None:
@@ -251,7 +306,7 @@ def register(
         },
     )
 
-    tokens = _issue_pair(user)
+    tokens = _issue_pair(user, db)
     db.commit()
     db.refresh(user)
 
@@ -315,7 +370,7 @@ def login(
         user.password_hash = hash_password(body.password)
 
     _register_successful_login(db, user)
-    tokens = _issue_pair(user)
+    tokens = _issue_pair(user, db)
     db.commit()
     return tokens
 
@@ -330,6 +385,13 @@ def refresh(
     body: RefreshRequest,
     db: Annotated[Session, Depends(get_db)],
 ) -> TokenPairResponse:
+    """Rotate the refresh token (D-017).
+
+    Every successful refresh revokes the presented token and issues a new
+    one in the same session family. Reusing an already-rotated (or revoked)
+    token is treated as theft: the whole family is revoked. Idle-timeout and
+    forced-re-auth limits are enforced here, on the server-side records.
+    """
     try:
         payload = verify_token(body.refresh_token, expected_type="refresh")
     except TokenError as exc:
@@ -338,30 +400,118 @@ def refresh(
             detail="Invalid or expired refresh token.",
         ) from exc
 
-    user = db.get(User, payload.sub)
-    if user is None or not user.is_active:
+    row = db.execute(
+        select(RefreshToken).where(RefreshToken.jti == payload.jti)
+    ).scalar_one_or_none()
+    if row is None:
+        # A validly-signed refresh JWT with no record: pre-rotation token or a
+        # replayed artifact. Refuse; nothing to revoke without a family.
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User is no longer active.",
+            detail="Unknown refresh token; sign in again.",
         )
-    return _issue_pair(user)
+    settings = get_settings()
+    now = utcnow()
+
+    if row.revoked_at is not None:
+        # Reuse of a rotated token inside the grace window is a benign race
+        # (concurrent server-side renders refreshing simultaneously): refuse
+        # this request but keep the family alive so the winner's token works.
+        grace = settings.shield_refresh_reuse_grace_seconds
+        revoked_at = _as_aware(row.revoked_at)
+        recently_rotated = (
+            row.replaced_by_jti is not None
+            and revoked_at is not None
+            and (now - revoked_at).total_seconds() <= grace
+        )
+        if recently_rotated:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Refresh token already rotated; retry with the newest token.",
+            )
+        # Outside the window (or never rotated): compromise signal, kill the family.
+        raise _refresh_reject(
+            db, row.family_id, "Refresh token reuse detected; session revoked, sign in again."
+        )
+
+    idle_limit = settings.shield_idle_timeout_seconds
+    if idle_limit and idle_limit > 0:
+        last_activity = _as_aware(row.last_used_at) or _as_aware(row.issued_at)
+        if last_activity is not None and (now - last_activity).total_seconds() > idle_limit:
+            raise _refresh_reject(db, row.family_id, "Session idle timeout; sign in again.")
+
+    forced_limit = settings.shield_forced_reauth_seconds
+    if forced_limit and forced_limit > 0:
+        family_start = db.execute(
+            select(RefreshToken.issued_at)
+            .where(RefreshToken.family_id == row.family_id)
+            .order_by(RefreshToken.issued_at.asc())
+            .limit(1)
+        ).scalar_one()
+        family_start = _as_aware(family_start)
+        if family_start is not None and (now - family_start).total_seconds() > forced_limit:
+            raise _refresh_reject(db, row.family_id, "Session maximum age reached; sign in again.")
+
+    user = db.get(User, payload.sub)
+    if user is None or not user.is_active:
+        raise _refresh_reject(db, row.family_id, "User is no longer active.")
+
+    # Rotate: retire the presented token, mint its successor in the family.
+    tokens, new_record = _issue_pair_with_record(user, db, family_id=row.family_id)
+    row.revoked_at = now
+    row.last_used_at = now
+    row.replaced_by_jti = new_record.jti
+    db.commit()
+    return tokens
 
 
 @router.post(
     "/logout",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Logout (audited; token revocation list lands in v1.x)",
+    summary="Logout (audited; revokes the session's refresh-token family)",
 )
 def logout(
     user: Annotated[User, Depends(current_user)],
     db: Annotated[Session, Depends(get_db)],
+    body: LogoutRequest | None = None,
 ) -> None:
+    """D-017: when the client presents its refresh token, the whole session
+    family is revoked server-side. Without one (legacy callers), every active
+    family for the user is revoked - the safe interpretation of "log out".
+    Access tokens stay stateless; their 15-minute TTL bounds the residue."""
+    revoked = 0
+    if body is not None and body.refresh_token:
+        try:
+            payload = verify_token(body.refresh_token, expected_type="refresh")
+            row = db.execute(
+                select(RefreshToken).where(RefreshToken.jti == payload.jti)
+            ).scalar_one_or_none()
+            if row is not None and row.user_id == user.id:
+                revoked = _revoke_family(db, row.family_id)
+        except TokenError:
+            pass  # Bad token on logout is not an error; fall through to revoke-all.
+    if revoked == 0:
+        now = utcnow()
+        rows = (
+            db.execute(
+                select(RefreshToken).where(
+                    RefreshToken.user_id == user.id,
+                    RefreshToken.revoked_at.is_(None),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for r in rows:
+            r.revoked_at = now
+        revoked = len(rows)
     audit(
         db,
         action="user.logout",
         target_type="user",
         target_id=user.id,
         actor_user_id=user.id,
+        details={"refresh_tokens_revoked": revoked},
     )
     db.commit()
 
