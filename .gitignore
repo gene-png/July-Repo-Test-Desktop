@@ -60,3 +60,7 @@ keycloak-data/
 *.db
 *.sqlite
 *.sqlite3
+_pytest_out.txt
+_run2.txt
+e2e-report/
+test-results/
