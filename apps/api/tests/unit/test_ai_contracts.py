@@ -141,7 +141,7 @@ def test_per_job_overrides_thread_to_provider(db_session) -> None:
     by_purpose = {c["purpose"]: c for c in provider.calls}
     # csf_score overrides both.
     assert by_purpose["csf_score"]["model"] == "claude-haiku-4-5"
-    assert by_purpose["csf_score"]["max_tokens"] == 128000
+    assert by_purpose["csf_score"]["max_tokens"] == 64000
     # risk_synthesize inherits (None threaded through).
     assert by_purpose["risk_synthesize"]["model"] is None
     assert by_purpose["risk_synthesize"]["max_tokens"] is None
@@ -160,7 +160,7 @@ def test_overrides_declared_on_the_two_big_jobs_only() -> None:
     assert overridden == {"csf_score", "mitre_map"}
     for n in ("csf_score", "mitre_map"):
         assert get_job(n).model == "claude-haiku-4-5"
-        assert get_job(n).max_tokens == 128000
+        assert get_job(n).max_tokens == 64000  # claude-haiku-4-5 output ceiling (live-verified)
     # Sanity: the shared default the others fall back to.
     assert DEFAULT_MAX_TOKENS == 16000
 

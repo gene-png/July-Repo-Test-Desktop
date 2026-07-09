@@ -279,7 +279,7 @@ def test_ai_status_reports_fixture_mode(app_client: TestClient) -> None:
     # A-5: readiness diagnostics + per-job overrides are always reported.
     assert body["sdk_importable"] is True
     assert body["per_job_overrides"]["csf_score"]["model"] == "claude-haiku-4-5"
-    assert body["per_job_overrides"]["mitre_map"]["max_tokens"] == 128000
+    assert body["per_job_overrides"]["mitre_map"]["max_tokens"] == 64000
 
     # Admin-only.
     assert (

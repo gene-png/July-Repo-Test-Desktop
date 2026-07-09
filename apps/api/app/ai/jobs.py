@@ -56,14 +56,16 @@ calculated by code. Return strictly JSON of this shape:
 """
 
 # csf_score can span the full Playbook (hundreds of tier x subcategory rows), so
-# it runs on the fast/cheap model with the large output ceiling (Task S1-A A-3).
+# it runs on the fast/cheap model at that model's output ceiling (Task S1-A A-3).
+# claude-haiku-4-5 caps output at 64000 tokens; requesting more is a live 400
+# (caught by the FS-D live smoke run). ~318 scored rows fit comfortably.
 register_job(
     AIJob(
         name="csf_score",
         prompt=_CSF_SCORE_PROMPT,
         parser=parse_json,
         model="claude-haiku-4-5",
-        max_tokens=128000,
+        max_tokens=64000,
     )
 )
 
@@ -102,15 +104,16 @@ Return strictly JSON of this shape:
 {describe_shape("mitre_map")}
 """
 
-# mitre_map emits the full 600+ technique Enterprise matrix, so it runs on the
-# fast/cheap model with the large output ceiling (Task S1-A A-3).
+# mitre_map runs per-tactic batches (routes/attack.py), so each call emits a
+# slice of the 600+ technique matrix, far under claude-haiku-4-5's 64000-token
+# output ceiling (requesting more is a live 400; caught by the FS-D smoke run).
 register_job(
     AIJob(
         name="mitre_map",
         prompt=_MITRE_MAP_PROMPT,
         parser=parse_json,
         model="claude-haiku-4-5",
-        max_tokens=128000,
+        max_tokens=64000,
     )
 )
 

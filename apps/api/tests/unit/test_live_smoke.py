@@ -112,5 +112,14 @@ def test_live_call_parses_and_validates(db_session, job_name) -> None:
     )
     # The registry parser already ran; re-assert the raw text parses too.
     assert result.data is not None
-    problems = validate_response(job_name, result.data)
-    assert not problems, f"{job_name} live response failed validation: {problems}"
+    if job_name == "tech_debt_extract":
+        # This job's registry parser converts the raw {"items": [...]} JSON
+        # into typed ExtractedCapability objects (and itself enforces the
+        # shape, raising on drift), so validate_response's raw-dict check
+        # does not apply to the parsed output. A non-empty typed list from
+        # the tiny two-row input is the live-path assertion here.
+        assert isinstance(result.data, list) and len(result.data) > 0
+        assert all(item.name for item in result.data)
+    else:
+        problems = validate_response(job_name, result.data)
+        assert not problems, f"{job_name} live response failed validation: {problems}"
