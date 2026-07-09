@@ -630,6 +630,7 @@ def latest_assessment(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No assessment yet.",
         )
+    # RELEASED is deprecated for v1 (no in-app release; G-1)
     if user.role != UserRole.ADMIN and a.status != ZtAssessmentStatus.RELEASED:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1179,6 +1180,7 @@ def finalize_zt_deliverable(
             notes=notes_map,
             target_stage=engagement_target,
             targets=targets_map,
+            top_n=None,  # B-4: XLSX Gap Plan carries every gap; PDF/DOCX cap at 20.
         )
     else:
         gap = analyze_gaps(
@@ -1186,6 +1188,7 @@ def finalize_zt_deliverable(
             stage_map,
             notes=notes_map,
             targets=targets_map,
+            top_n=None,  # B-4: XLSX Gap Plan carries every gap; PDF/DOCX cap at 20.
         )
 
     client_name = client.legal_name

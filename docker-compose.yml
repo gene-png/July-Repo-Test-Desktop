@@ -29,8 +29,14 @@ x-api-env: &api-env
   JWT_REFRESH_TTL_SECONDS: ${JWT_REFRESH_TTL_SECONDS:-1800}
   SHIELD_ACCOUNT_LOCKOUT_MAX_ATTEMPTS: ${SHIELD_ACCOUNT_LOCKOUT_MAX_ATTEMPTS:-10}
   SHIELD_ACCOUNT_LOCKOUT_WINDOW_SECONDS: ${SHIELD_ACCOUNT_LOCKOUT_WINDOW_SECONDS:-900}
+  # RESERVED / UNIMPLEMENTED (H-1): loaded by config.py but NOT enforced anywhere
+  # in v1. Idle timeout + forced re-auth are PLANNED for the MFA work package (see
+  # DECISIONS.md D-017). Present so the values are pinnable ahead of that work.
   SHIELD_IDLE_TIMEOUT_SECONDS: ${SHIELD_IDLE_TIMEOUT_SECONDS:-1800}
   SHIELD_FORCED_REAUTH_SECONDS: ${SHIELD_FORCED_REAUTH_SECONDS:-86400}
+  # Seed-data location inside the container. parents[3] would climb above /app,
+  # so point loaders at the read-only packages/ mount added on the api service.
+  SHIELD_SEED_DATA_DIR: ${SHIELD_SEED_DATA_DIR:-/packages}
   SMTP_HOST: ${SMTP_HOST:-mailhog}
   SMTP_PORT: ${SMTP_PORT:-1025}
   SMTP_FROM: ${SMTP_FROM:-no-reply@shield.local}
@@ -158,6 +164,10 @@ services:
       - "8000:8000"
     volumes:
       - ./apps/api:/app
+      # Seed data (CSF/ZT/ATT&CK JSON). Read-only; resolved via
+      # SHIELD_SEED_DATA_DIR=/packages by scripts/_common.py so the seed loaders
+      # work inside the container (where the repo-relative fallback overshoots).
+      - ./packages:/packages:ro
     # Apply pending migrations before serving so a newly-added revision can't
     # leave the persistent db volume behind the (hot-reloaded) model code.
     # Dev convenience only - in prod, migrations run as a discrete deploy step,

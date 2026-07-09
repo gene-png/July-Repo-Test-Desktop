@@ -325,4 +325,26 @@ Session note: partway through Sprint 2 QA the account hit its monthly API spend 
 
 ### Sprint 3 evidence
 
-(pending)
+Four Opus implementation subagents (S3-A exports, S3-B risk governance, S3-C ops/docs, S3-D frontend + audit viewer) plus a Playwright QA subagent; every diff lead-reviewed. Migrations 0034 (CSF action items) and 0036 (risk governance) chain linearly off 0033; the two agents coordinated the chain themselves and alembic reports one head.
+
+- B-4 (S3-A): finalize passes top_n=None; XLSX Gap Plan sheets carry every gap; PDF/DOCX narratives read "Top 20 of N remediation gaps" with a pointer to the XLSX.
+- B-5 (S3-A): ZT XLSX gains a Roadmap sheet from build_roadmap; DOCX/PDF gain the roadmap section and the DOCX an Answers section; persisted run-ai narratives render into the executive section labeled "Analyst-reviewed draft (AI-assisted)".
+- B-6 reduced (S3-A): Consolidation Plan sheet now carries per-item rows (item, disposition, target, rationale, per-item savings) with totals and the cost-known flag.
+- B-7 (S3-A + S3-B): ATT&CK gap lists ordered by weakest tactic coverage, then gap-before-partial, then code, and titled with the rule; DOCX renders technique codes instead of blank names; ATT&CK ai_summaries render into the exec section; Risk DOCX gains the 5x5 matrix; Playbook and Risk filenames route through deliverable_filename (section 15.5 convention).
+- F-3 (S3-B): risk entries get PATCH (tier always re-derived), lock, soft delete; regenerate copies locked entries verbatim and skips duplicate findings; POST register approve; export 409s until approved; gate requires APPROVED (or RELEASED, see lead fix) ATT&CK plus one approved CSF/ZT; CSF harvest honors the client target tier; gate and exports carry source statuses.
+- H-8 (S3-A): CsfActionItem model, migration, CRUD routes, and an always-present Action Plan sheet in the playbook XLSX.
+- E-6 (S3-C): seed loaders work in module and script form with SHIELD_SEED_DATA_DIR; compose mounts packages/ read-only; make seed runs everything.
+- H-1 (S3-C): compensating-control claims retracted to "planned, not yet enforced" across README, BUILD_REPORT, .env.example, compose, config comments, keycloak README; DECISIONS gains D-017 deferring enforcement into the MFA package, rotation first; doc-grep tests keep it true.
+- H-3 (S3-C): backup.sh, restore.sh, object_sync.py, restore_drill.py, runbook, and make restore-drill. The drill ran against the live local Postgres and printed RESTORE DRILL: PASS (dump, drop, recreate, restore, marker row survives).
+- H-4 (S3-C): architecture.md rewritten truthfully (multi-tenant, no worker, synchronous AI with contracts and per-job models, one-way redaction plus preview gate, audit_entry); README tenancy/worker claims fixed; duplicate D-015 renumbered to D-016; D-006 supersession and D-009 i18n rescission notes added; the two "(admin/reviewer)" OpenAPI summaries corrected; reference-docs README notes the external work order; CHANGELOG gains the remediation entry.
+- D-4 (S3-D): all six potholes closed: auth redirect with callbackUrl on /assessments; registered=1 note on sign-in; Intake nav link for clients; bad-type fallback links to /assessments; dev questionnaire-preview admin-gated (404 otherwise); /admin/active is a real cross-client in-progress table linking into workspaces.
+- G-1 (S3-D): no client-facing "Report released" anywhere; terminal cards read Complete with "your consultant will deliver your report"; RELEASED gates in the API commented deprecated for v1.
+- Risk UI (S3-D): entry edit dialog with live derived-tier preview, lock toggle, soft delete, register Approve gating Export, source-status pills, generate warnings banner.
+- H-7 (S3-D): GET /admin/audit with filters, pagination, CSV; /admin/audit page with filter bar and CSV download; client_id filtered portably from the details JSON.
+
+QA findings and lead fixes (both verified by rerun):
+
+1. HIGH: fixture mode registered no runtime fixtures, so every Run AI 500ed in demo stacks while the banner promised simulation (the old fixture module was deleted by C-1 and never replaced at runtime). Lead added app/ai/demo_fixtures.py: input-grounded, deterministic responses per job derived from the caller's own redacted payload (empty input yields empty output, preserving C-1's no-fabrication guarantee), registered by LLMClient.from_settings in fixture mode. Unit tests cover grounding, determinism, and empty-input behavior.
+2. MEDIUM: the F-3 gate accepted only APPROVED sources, but the demo seed ships RELEASED assessments and the approve endpoints 409 on released rows, so such clients could never generate a register. Lead extended the gate to accept RELEASED as post-approval.
+
+Gate results: 628 unit tests, 0 failures, 5 gated live-smoke skips (junit-verified); ruff, black, bandit, prettier, eslint, tsc clean; Next production build green. Playwright: 19 passed, 0 failed, 0 skipped, including the previously blocked E-5 simulated-pill spec and the full F-3 governance loop (generate, edit, lock, regenerate preserves the locked entry, approve, export, artifact download) end to end against the live stack with migrations 0034/0036 applied. Restore drill PASS.

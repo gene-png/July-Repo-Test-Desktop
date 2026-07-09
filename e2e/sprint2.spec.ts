@@ -1,6 +1,12 @@
 import { expect, request as playwrightRequest, test } from "@playwright/test";
 import type { APIRequestContext, Page } from "@playwright/test";
 
+import {
+  loginApiWithRetry,
+  signUpResilient,
+  uiAuthWithRetry,
+} from "./_ratelimit";
+
 /**
  * Sprint 2 user-facing regression coverage for the SHIELD platform.
  *
@@ -45,30 +51,27 @@ async function loginApi(
   email: string,
   password: string,
 ): Promise<string> {
-  const res = await ctx.post(`${API}/auth/login`, {
-    data: { email, password },
-  });
-  expect(
-    res.ok(),
-    `api login failed (${res.status()}): ${await res.text()}`,
-  ).toBeTruthy();
-  return ((await res.json()) as { access_token: string }).access_token;
+  // Retry through a transient auth 429 (shared per-IP limiter, Sprint 3).
+  return loginApiWithRetry(ctx, API, email, password);
 }
 
-/** UI sign-in through the real credentials form. */
+/** UI sign-in through the real credentials form (429-resilient). */
 async function signIn(
   page: Page,
   email: string,
   password: string,
 ): Promise<void> {
-  await page.goto("/sign-in");
-  await page.getByLabel(/email/i).fill(email);
-  await page.getByLabel(/password/i).fill(password);
-  await page.getByRole("button", { name: /sign in/i }).click();
-  // The form does a full-page assign to the callbackUrl on success.
-  await page.waitForURL((url) => !url.pathname.includes("/sign-in"), {
-    timeout: 15_000,
-  });
+  await uiAuthWithRetry(
+    page,
+    async () => {
+      await page.goto("/sign-in");
+      await page.getByLabel(/email/i).fill(email);
+      await page.getByLabel(/password/i).fill(password);
+      await page.getByRole("button", { name: /sign in/i }).click();
+    },
+    (url) => !url.pathname.includes("/sign-in"),
+    "sign-in",
+  );
 }
 
 /** Pin the admin's active-client cookie so tenant-scoped proxy calls resolve. */
@@ -238,8 +241,46 @@ test("E-5: admin AI status banner shows the 'simulated (deterministic fixtures)'
 // purpose='csf_score'` (verified via the API and /tmp/shield-api.log). A live
 // run that would show the badge cannot be produced without changing app code.
 // The banner half of E-5 is covered by the passing test above.
-test.fixme("E-5: 'simulated' pill appears next to a successful Run AI result", async () => {
-  // Blocked: fixture-mode run-ai 500s (no runtime fixtures registered).
+//
+// Sprint 3 re-verification: still blocked. The same bare-FixtureProvider root
+// cause was reconfirmed against the fresh build via the Risk Register generate
+// path — POST /risk/.../register/generate on an UNLOCKED gate 500s with
+// `KeyError: No fixture registered for purpose='risk_synthesize'`. Every AI
+// purpose (csf_score / zt_score / mitre_map / risk_synthesize) shares that
+// empty-provider fate, so no successful run-ai can surface the pill here. See
+// the F-3 register-loop fixme note in sprint3.spec.ts.
+// UNBLOCKED (lead fix): fixture mode registers input-grounded runtime
+// fixtures (app/ai/demo_fixtures.py), so Run AI succeeds and the pill renders.
+test("E-5: 'simulated' pill appears next to a successful Run AI result", async ({
+  page,
+}) => {
+  // The seeded Atlas CSF assessment is RELEASED (read-only workspace), so
+  // create a fresh CSF service + draft assessment to run AI against.
+  const svcRes = await page.request.post(`${API}/csf/services`, {
+    headers: authHeaders(adminAccessToken, atlasClientId),
+    data: { kind: "nist_csf", title: `E2E E-5 pill ${Date.now()}` },
+  });
+  expect(svcRes.status(), await svcRes.text()).toBe(201);
+  const freshServiceId = ((await svcRes.json()) as { id: string }).id;
+  const aRes = await page.request.post(
+    `${API}/csf/services/${freshServiceId}/assessments`,
+    { headers: authHeaders(adminAccessToken, atlasClientId) },
+  );
+  expect([200, 201].includes(aRes.status()), await aRes.text()).toBe(true);
+
+  await signIn(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+  await pinActiveClient(page, atlasClientId);
+
+  await page.goto(`/admin/services/${freshServiceId}/csf`);
+  const runButton = page.getByRole("button", { name: /Run AI \(csf_score\)/i });
+  await expect(runButton).toBeVisible({ timeout: 15_000 });
+  await expect(runButton).toBeEnabled({ timeout: 15_000 });
+  await runButton.click();
+
+  // Fixture-mode run completes and the result line carries the pill.
+  await expect(page.getByText(/simulated/i).first()).toBeVisible({
+    timeout: 30_000,
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -309,6 +350,9 @@ test("H-6: run-ai preview returns the redacted payload and writes no llm_calls r
 async function provisionPendingIntakeSignup(
   page: Page,
 ): Promise<{ email: string; password: string }> {
+  // Register + a fallback resilient sign-in can chain several 429 backoffs under
+  // full-suite auth load; give the test room beyond the 60s default (Sprint 3).
+  test.setTimeout(150_000);
   const ts = Date.now();
   const domain = `qa-pending-${ts}.example`;
   const email = `newuser-${ts}@${domain}`;
@@ -328,13 +372,14 @@ async function provisionPendingIntakeSignup(
   expect(dom.status(), await dom.text()).toBe(201);
 
   // Self-register through the real sign-up form; on success it signs in and
-  // full-page-assigns to /intake.
-  await page.goto("/sign-up");
-  await page.getByLabel(/full name/i).fill("Pending Intake User");
-  await page.getByLabel(/email/i).fill(email);
-  await page.getByLabel(/password/i).fill(password);
-  await page.getByRole("button", { name: /create account/i }).click();
-  await page.waitForURL(/\/intake/, { timeout: 20_000 });
+  // full-page-assigns to /intake. /auth/register + its auto-login share the
+  // per-IP auth limiter, so use the 429-resilient sign-up (which falls back to a
+  // resilient sign-in if the post-register auto-login is throttled). Sprint 3.
+  await signUpResilient(page, {
+    fullName: "Pending Intake User",
+    email,
+    password,
+  });
 
   return { email, password };
 }

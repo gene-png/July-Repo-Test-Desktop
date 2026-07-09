@@ -326,6 +326,7 @@ def latest_assessment(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No assessment yet.",
         )
+    # RELEASED is deprecated for v1 (no in-app release; G-1)
     if user.role != UserRole.ADMIN and a.status != AttackAssessmentStatus.RELEASED:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

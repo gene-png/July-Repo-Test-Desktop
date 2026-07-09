@@ -69,7 +69,7 @@ def test_cisa_xlsx_has_three_sheets() -> None:
     raw = render_xlsx(_ctx(ZtFrameworkCode.CISA_ZTMM_2_0))
     assert raw[:2] == b"PK"
     wb = load_workbook(io.BytesIO(raw))
-    assert set(wb.sheetnames) == {"Score Summary", "Answers", "Gap Plan"}
+    assert set(wb.sheetnames) == {"Score Summary", "Answers", "Gap Plan", "Roadmap"}
 
 
 @pytest.mark.unit

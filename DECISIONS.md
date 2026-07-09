@@ -46,7 +46,8 @@ Any admin in a deployment may attach a reviewer. A reviewer's scope is the entir
 **2026-05-19 · workflow**
 Approval flow: **admin marks deliverable "final"** → **reviewer (if any) approves** → **admin releases to client**. Reviewer step is skipped when no reviewer is attached to the engagement.
 **Rationale:** Eugene confirmed recommended option. Matches Phase 5 reviewer audit-walk surface (Master Spec §15 Phase 5). The "if any" guard handles engagements without a reviewer without needing a second release path.
-**Ref:** Master Spec §17 Q4, §15 Phase 5.
+**Superseded in part:** the approval/release flow now runs **within a single client tenant** rather than deployment-wide (per the multi-tenant D-015 — reviewer scope is the active tenant), and the client-facing "release to client" step is **deprecated for v1** (clients never see a release action; terminal statuses read "Complete: your consultant will deliver your report" per the G-1 remediation, see `CHANGELOG.md` [Unreleased]).
+**Ref:** Master Spec §17 Q4, §15 Phase 5; superseded in part by D-015.
 
 ## D-007 — ATT&CK technique scope (spec §17 Q5) **[FLIPPED FROM RECOMMENDATION]**
 
@@ -73,6 +74,7 @@ See D-002. Anthropic Claude API as the v1 default, env-swappable.
 **2026-05-19 · i18n**
 English only at v1.0. Build i18n-aware (no hardcoded strings; locale-keyed message files via `next-intl` for web and `babel`/`gettext`-style catalogs for API responses). Additional locales added in v1.x as content-only PRs.
 **Rationale:** Eugene confirmed recommended option. Avoids translation cost in v1 while preserving zero-rewrite extensibility.
+**Rescinded for v1 (2026-07-09 remediation):** the i18n-plumbing requirement is **withdrawn for v1**. The shipped product is English-only with plain hardcoded copy; `next-intl` / gettext catalogs were not built and are **not** a v1 deliverable. The extensibility goal is deferred to whenever a second locale is actually funded; treat any claim that v1 is "i18n-aware / locale-keyed" as inaccurate. English-only at v1.0 still holds.
 **Ref:** Master Spec §17 Q7.
 
 ## D-010 — Repo layout: monorepo with pnpm workspaces + Python workspace
@@ -131,9 +133,9 @@ Opening commit lands directly on `main`. Push is deferred until the dev containe
 **Rationale:** AI Prompt §3.9 prescribes "push frequently" but §3.3 forbids the agent from introducing its own credentials. Eugene will push when he attaches a PAT or SSH key to the container.
 **Ref:** AI Prompt §3.3, §3.9.
 
-## D-015 — Part F: harden and ship decisions
+## D-016 — Part F: harden and ship decisions
 
-**2026-06-26 · F (harden)**
+**2026-06-26 · F (harden)** _(renumbered from duplicate D-015; see the multi-tenant D-015 above)_
 
 - **Worker / async:** AI runs are **synchronous** — the `run-ai` endpoints invoke
   the LLM inline via `app.ai.engine.run_job`. There is no Celery worker; the
@@ -160,3 +162,36 @@ Opening commit lands directly on `main`. Push is deferred until the dev containe
   run under `pytest -m unit` in CI.
 
 **Ref:** Work Order Part F.
+
+## D-017 — Session-control enforcement deferred into the MFA work package
+
+**2026-07-09 · auth (remediation H-1)**
+The idle-timeout and forced-re-auth session controls are **deferred**, not
+shipped. `SHIELD_IDLE_TIMEOUT_SECONDS` and `SHIELD_FORCED_REAUTH_SECONDS` are
+loaded by `config.py` but enforced by **no** code path today; earlier docs
+(README compensating-controls, BUILD_REPORT OWASP A07, this log) presented them
+as active controls, which was inaccurate. They are now annotated
+RESERVED/UNIMPLEMENTED at every surface (`.env.example`, `docker-compose.yml`,
+`config.py`, `infra/keycloak/README.md`).
+
+**Decision:** enforcement of idle timeout, forced re-auth, and refresh-token
+lifecycle is folded into the **MFA work package**, whose ordered scope is:
+
+1. **Refresh-token rotation + server-side revocation** (first item) — rotate the
+   refresh token on every use, persist a revocation/allow-list so a stolen or
+   idled token can be invalidated server-side. This is the prerequisite that
+   makes real idle-timeout and forced-re-auth enforceable.
+2. Idle-timeout enforcement (reject access when `now - last_seen >
+SHIELD_IDLE_TIMEOUT_SECONDS`).
+3. Forced re-auth enforcement (reject when session age >
+   `SHIELD_FORCED_REAUTH_SECONDS`).
+4. MFA enrollment + verification (TOTP/WebAuthn) and email verification, gated by
+   `SHIELD_AUTH_REQUIRE_MFA` / `SHIELD_AUTH_REQUIRE_EMAIL_VERIFY`.
+
+Until that package lands, the **enforced** compensating controls are the short
+JWT access-token TTL and account lockout only.
+
+**Rationale:** honesty over aspiration — a control that no code reads is not a
+control. Refresh-token rotation is named first because idle/forced-reauth
+enforcement is not meaningful without server-side session invalidation.
+**Ref:** Master Spec §2 (MFA deferred), §4.5 (session security); remediation H-1.

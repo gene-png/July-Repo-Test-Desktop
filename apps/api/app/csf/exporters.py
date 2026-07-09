@@ -32,6 +32,17 @@ if TYPE_CHECKING:
     from reportlab.platypus import TableStyle
 from app.models.csf_assessment import CsfAnswer, CsfAssessment
 
+# Narrative sections (PDF/DOCX) cap the gap table at this many rows; the XLSX
+# Gap Plan carries the full list (B-4).
+NARRATIVE_GAP_CAP = 20
+
+
+def _gap_heading(total: int) -> str:
+    """Heading for the narrative gap table (B-4)."""
+    if total > NARRATIVE_GAP_CAP:
+        return f"Top {NARRATIVE_GAP_CAP} of {total} remediation gaps"
+    return f"Remediation gaps ({total})"
+
 
 @dataclass(frozen=True)
 class CsfDeliverableContext:
@@ -276,13 +287,15 @@ def render_docx(ctx: CsfDeliverableContext) -> bytes:
         ],
     )
 
-    add_heading(doc, f"Top remediation gaps (target T{ctx.gap.target_tier})")
+    total_gaps = ctx.gap.total_gap_count
+    add_heading(doc, f"{_gap_heading(total_gaps)} (target T{ctx.gap.target_tier})")
     if not ctx.gap.gaps:
         add_paragraphs(
             doc,
             [f"No gaps at target tier {ctx.gap.target_tier} " f"({ctx.gap.target_label})."],
         )
     else:
+        shown = ctx.gap.gaps[:NARRATIVE_GAP_CAP]
         add_table(
             doc,
             ["Code", "Function", "Subcategory", "Current → Target", "Priority"],
@@ -294,9 +307,17 @@ def render_docx(ctx: CsfDeliverableContext) -> bytes:
                     f"T{g.current_tier} → T{g.target_tier}",
                     f"{g.priority_score:.2f}",
                 ]
-                for g in ctx.gap.gaps
+                for g in shown
             ],
         )
+        if total_gaps > len(shown):
+            add_paragraphs(
+                doc,
+                [
+                    f"Showing the {len(shown)} highest-priority gaps of {total_gaps}. "
+                    "The full prioritized list is in the Gap Plan sheet of the XLSX workbook.",
+                ],
+            )
 
     return to_bytes(doc)
 
@@ -367,7 +388,8 @@ def render_pdf(ctx: CsfDeliverableContext) -> bytes:
 
     story.append(PageBreak())
 
-    story.append(Paragraph(f"Top remediation gaps (target T{ctx.gap.target_tier})", h2))
+    total_gaps = ctx.gap.total_gap_count
+    story.append(Paragraph(f"{_gap_heading(total_gaps)} (target T{ctx.gap.target_tier})", h2))
     if not ctx.gap.gaps:
         story.append(
             Paragraph(
@@ -376,10 +398,11 @@ def render_pdf(ctx: CsfDeliverableContext) -> bytes:
             )
         )
     else:
+        shown = ctx.gap.gaps[:NARRATIVE_GAP_CAP]
         gap_table_data: list[list] = [
             ["Code", "Function", "Subcategory", "Current → Target", "Priority"]
         ]
-        for g in ctx.gap.gaps:
+        for g in shown:
             gap_table_data.append(
                 [
                     g.code,
@@ -396,6 +419,15 @@ def render_pdf(ctx: CsfDeliverableContext) -> bytes:
         )
         gap_table.setStyle(_table_style())
         story.append(gap_table)
+        if total_gaps > len(shown):
+            story.append(Spacer(1, 0.1 * inch))
+            story.append(
+                Paragraph(
+                    f"Showing the {len(shown)} highest-priority gaps of {total_gaps}. "
+                    "The full prioritized list is in the Gap Plan sheet of the XLSX workbook.",
+                    body,
+                )
+            )
 
     doc.build(story)
     return out.getvalue()

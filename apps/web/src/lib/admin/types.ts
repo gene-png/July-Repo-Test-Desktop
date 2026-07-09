@@ -87,6 +87,38 @@ export interface FulfillServiceRequestResponse {
   already_fulfilled: boolean;
 }
 
+/** Mirrors AdminAuditRow in apps/api/app/schemas/admin.py (H-7). */
+export interface AdminAuditRow {
+  id: string;
+  at: string;
+  action: string;
+  target_type: string;
+  target_id: string | null;
+  actor_user_id: string | null;
+  client_id: string | null;
+  details: Record<string, unknown> | null;
+  correlation_id: string | null;
+}
+
+/** Mirrors AdminAuditListResponse in apps/api/app/schemas/admin.py. */
+export interface AdminAuditListResponse {
+  rows: AdminAuditRow[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** Filter/pagination state for the audit-log viewer. */
+export interface AuditFilters {
+  client_id?: string;
+  action?: string;
+  actor_user_id?: string;
+  date_from?: string;
+  date_to?: string;
+  limit?: number;
+  offset?: number;
+}
+
 /** Per-service-type workspace route segment under /admin/services/{id}/. */
 export const WORKSPACE_PATH: Record<ServiceType, string | null> = {
   tech_debt: "tech-debt",

@@ -44,6 +44,9 @@ class RiskExportContext:
     client_legal_name: str
     version: int
     entries: list[Any]  # RiskEntry rows
+    # F-3: human-readable labels of the source assessments (kind + status), shown
+    # as a "Sources" line so the deliverable states what it was derived from.
+    sources: list[str]
 
 
 def _enum_list(values, enum_cls):
@@ -59,12 +62,17 @@ def _enum_list(values, enum_cls):
 
 
 def build_context(
-    *, client_legal_name: str | None, version: int, entries: Sequence[Any]
+    *,
+    client_legal_name: str | None,
+    version: int,
+    entries: Sequence[Any],
+    sources: Sequence[str] | None = None,
 ) -> RiskExportContext:
     return RiskExportContext(
         client_legal_name=client_legal_name or "Client",
         version=version,
         entries=list(entries),
+        sources=list(sources or []),
     )
 
 
@@ -167,17 +175,45 @@ def _summary_lines(ctx: RiskExportContext) -> list[str]:
     ac = axis_counts(axes)
     acts = action_counts(actions)
     crit_high = tc["critical"] + tc["high"]
-    return [
+    lines = [
         f"Total entries: {len(ctx.entries)}",
         f"Critical + High: {crit_high}",
         f"By axis — detection {ac['detection']}, prevention "
         f"{ac['prevention']}, response {ac['response']}",
         "By recommended action — " + ", ".join(f"{k} {v}" for k, v in acts.items() if v),
     ]
+    if ctx.sources:
+        lines.append("Sources — " + ", ".join(ctx.sources))
+    return lines
 
 
 def _legend_rows() -> list[list[str]]:
     return [[t.value.title(), cadence_for(t)] for t in RiskTier]
+
+
+def _matrix_header() -> list[str]:
+    # Top-left corner blank, then impact columns left-to-right.
+    return [""] + [im.value.title() for im in IMPACT_ORDER]
+
+
+def _matrix_rows(ctx: RiskExportContext) -> list[list[str]]:
+    """Rows of the 5x5 grid (likelihood high->low), per-cell entry counts."""
+    matrix = matrix_counts(
+        [
+            (Likelihood(e.likelihood), Impact(e.impact))
+            for e in ctx.entries
+            if e.likelihood in Likelihood._value2member_map_
+            and e.impact in Impact._value2member_map_
+        ]
+    )
+    rows: list[list[str]] = []
+    for lk in reversed(LIKELIHOOD_ORDER):
+        row = [lk.value.replace("_", " ").title()]
+        for im in IMPACT_ORDER:
+            cell = next(c for c in matrix if c.likelihood == lk.value and c.impact == im.value)
+            row.append(str(cell.count))
+        rows.append(row)
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -240,22 +276,8 @@ def render_pdf(ctx: RiskExportContext) -> bytes:
         story.append(Paragraph(line, body))
 
     story.append(Paragraph("Likelihood x Impact matrix", h2))
-    matrix = matrix_counts(
-        [
-            (Likelihood(e.likelihood), Impact(e.impact))
-            for e in ctx.entries
-            if e.likelihood in Likelihood._value2member_map_
-            and e.impact in Impact._value2member_map_
-        ]
-    )
     # Build a 5x5 grid of counts (rows = likelihood high->low, cols = impact).
-    grid: list[list] = [[""] + [im.value.title() for im in IMPACT_ORDER]]
-    for lk in reversed(LIKELIHOOD_ORDER):
-        row = [lk.value.replace("_", " ").title()]
-        for im in IMPACT_ORDER:
-            cell = next(c for c in matrix if c.likelihood == lk.value and c.impact == im.value)
-            row.append(str(cell.count))
-        grid.append(row)
+    grid: list[list] = [_matrix_header(), *_matrix_rows(ctx)]
     story.append(_grid(grid, [1.1 * inch] + [0.9 * inch] * 5))
 
     story.append(Paragraph("Tier legend (review cadence)", h2))
@@ -306,6 +328,10 @@ def render_docx(ctx: RiskExportContext) -> bytes:
 
     add_heading(doc, "Summary")
     add_paragraphs(doc, _summary_lines(ctx))
+
+    # B-7: the 5x5 Likelihood x Impact matrix, ported from the PDF rendering.
+    add_heading(doc, "Likelihood x Impact matrix")
+    add_table(doc, _matrix_header(), _matrix_rows(ctx))
 
     add_heading(doc, "Tier legend (review cadence)")
     add_table(doc, ["Tier", "Suggested cadence"], _legend_rows())

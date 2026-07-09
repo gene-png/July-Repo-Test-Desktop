@@ -304,7 +304,16 @@ class LLMClient:
     @classmethod
     def from_settings(cls, settings: Settings | None = None) -> LLMClient:
         s = settings or get_settings()
-        return cls(_build_provider(s), s)
+        provider = _build_provider(s)
+        if isinstance(provider, FixtureProvider):
+            # Fixture mode must actually simulate (E-5): register the
+            # input-grounded runtime fixtures so Run AI works in demo stacks
+            # instead of 500ing with "No fixture registered". Imported lazily
+            # to avoid a module cycle (demo_fixtures imports FixtureProvider).
+            from app.ai.demo_fixtures import register_demo_fixtures
+
+            register_demo_fixtures(provider)
+        return cls(provider, s)
 
     @property
     def mode(self) -> LLMMode:

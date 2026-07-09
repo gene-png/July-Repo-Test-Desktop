@@ -121,15 +121,18 @@ def test_attack_bad_shape_returns_502(app_client) -> None:
 def test_risk_bad_shape_returns_502(app_client) -> None:
     c, provider = app_client
     h, cid = _admin(c)
-    # Unlock the gate: an ATT&CK assessment + a ZT assessment for the client.
+    # Unlock the gate: an APPROVED ATT&CK assessment + an APPROVED ZT assessment
+    # for the client (F-3 requires approved sources).
     a_svc = c.post(
         "/attack/services", headers=h, json={"kind": "attack_coverage", "title": "A"}
     ).json()["id"]
-    c.post(f"/attack/services/{a_svc}/assessments", headers=h)
+    a_aid = c.post(f"/attack/services/{a_svc}/assessments", headers=h).json()["id"]
+    c.post(f"/attack/assessments/{a_aid}/approve", headers=h)
     z_svc = c.post(
         "/zt/services", headers=h, json={"kind": "zero_trust_cisa", "title": "Z"}
     ).json()["id"]
-    c.post(f"/zt/services/{z_svc}/assessments", headers=h)
+    z_aid = c.post(f"/zt/services/{z_svc}/assessments", headers=h).json()["id"]
+    c.post(f"/zt/assessments/{z_aid}/approve", headers=h)
 
     provider.register_static("risk_synthesize", LLMResponse('{"entries": "nope"}'))
     r = c.post(f"/risk/clients/{cid}/register/generate", headers=h)

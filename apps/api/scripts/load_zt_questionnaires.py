@@ -20,12 +20,19 @@ Run it from apps/api:
 from __future__ import annotations
 
 import json
+import sys
+from pathlib import Path
 
-from app.db.session import SessionLocal
-from app.models.questionnaire import Question
-from sqlalchemy import select
+# Bootstrap sys.path so the script form (`python scripts/load_zt_questionnaires.py`)
+# resolves `app` and `scripts` packages the same way the module form
+# (`python -m scripts.load_zt_questionnaires`) does. parents[1] is apps/api.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts._common import PACKAGES, print_progress
+from app.db.session import SessionLocal  # noqa: E402
+from app.models.questionnaire import Question  # noqa: E402
+from sqlalchemy import select  # noqa: E402
+
+from scripts._common import PACKAGES, print_progress  # noqa: E402
 
 LOADER = "zt_questionnaires"
 SOURCES = (

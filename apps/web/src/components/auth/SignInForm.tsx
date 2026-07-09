@@ -7,6 +7,9 @@ import * as React from "react";
 export function SignInForm(): JSX.Element {
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") ?? "/";
+  // D-4: sign-up redirects here with ?registered=1 so we can confirm the
+  // account was created before the user re-enters their credentials.
+  const justRegistered = searchParams.get("registered") === "1";
 
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
@@ -40,6 +43,14 @@ export function SignInForm(): JSX.Element {
 
   return (
     <form className="flex flex-col gap-5" onSubmit={onSubmit} noValidate>
+      {justRegistered ? (
+        <div
+          role="status"
+          className="rounded-md border border-status-success-border bg-status-success-bg px-3 py-2 text-sm text-status-success-fg"
+        >
+          Account created. Sign in to continue.
+        </div>
+      ) : null}
       <div className="flex flex-col gap-1.5">
         <label htmlFor="email" className="text-sm font-medium text-ink-primary">
           Email

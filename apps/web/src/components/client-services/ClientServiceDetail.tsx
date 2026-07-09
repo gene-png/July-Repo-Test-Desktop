@@ -31,6 +31,14 @@ function statusTone(s: string): "info" | "warning" | "success" | "neutral" {
   return "neutral";
 }
 
+/** G-1: client-facing label — terminal states read "Complete", never "released". */
+function statusLabel(s: string): string {
+  if (s === "released" || s === "approved") return "Complete";
+  if (s === "submitted") return "Submitted — under review";
+  if (s === "draft" || s === "in_progress") return "In progress";
+  return s;
+}
+
 /** Ordered lifecycle steps we can surface from the assessments list. */
 function timeline(e: AssessmentResponse): { label: string; at: string }[] {
   const steps: { label: string; at: string }[] = [];
@@ -129,7 +137,7 @@ export function ClientServiceDetail({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle>Status</CardTitle>
             <StatusPill tone={statusTone(status)} withDot>
-              {status}
+              {statusLabel(status)}
             </StatusPill>
           </div>
         </CardHeader>

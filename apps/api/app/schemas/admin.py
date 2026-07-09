@@ -236,3 +236,32 @@ class AdminDomainListResponse(BaseModel):
 
 class AdminDomainCreateRequest(BaseModel):
     domain: str
+
+
+class AdminAuditRow(BaseModel):
+    """One append-only audit entry (H-7 viewer).
+
+    `client_id` is surfaced from the entry's `details` payload when the acting
+    route recorded it there; it is not a column on the audit table.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    at: datetime
+    action: str
+    target_type: str
+    target_id: uuid.UUID | None = None
+    actor_user_id: uuid.UUID | None = None
+    client_id: uuid.UUID | None = None
+    details: dict | None = None
+    correlation_id: str | None = None
+
+
+class AdminAuditListResponse(BaseModel):
+    """A page of audit entries plus the total matching the active filters."""
+
+    rows: list[AdminAuditRow]
+    total: int
+    limit: int
+    offset: int

@@ -12,6 +12,7 @@ Phase 2 ships the read-only queue view. Phase 3+ adds the workflow surfaces
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -31,6 +32,7 @@ from app.db.session import get_db
 from app.dependencies import require_role
 from app.models._common import utcnow
 from app.models.artifact import Artifact
+from app.models.audit_entry import AuditEntry
 from app.models.client import Client
 from app.models.client_domain import ClientDomain
 from app.models.llm_call import LLMCall
@@ -40,6 +42,8 @@ from app.models.user import User, UserRole
 from app.schemas.admin import (
     AdminAiStatus,
     AdminArtifactRow,
+    AdminAuditListResponse,
+    AdminAuditRow,
     AdminClientCreateRequest,
     AdminClientListResponse,
     AdminClientSummary,
@@ -333,7 +337,7 @@ def reactivate_user(
 @router.get(
     "/clients",
     response_model=AdminClientListResponse,
-    summary="List all clients (admin/reviewer)",
+    summary="List all clients (admin)",
 )
 def list_clients(
     _admin: Annotated[User, _admin_required],
@@ -386,7 +390,7 @@ def create_client(
 @router.get(
     "/clients/{cid}",
     response_model=AdminClientSummary,
-    summary="Client detail (admin/reviewer)",
+    summary="Client detail (admin)",
 )
 def get_client(
     cid: uuid.UUID,
@@ -842,3 +846,128 @@ def ai_preview_ack(
     )
     db.commit()
     return AiPreviewAckResponse(client_id=body.client_id, acknowledged=True)
+
+
+_AUDIT_MAX_LIMIT = 200
+_AUDIT_DEFAULT_LIMIT = 50
+
+
+def _audit_client_filter(db: Session, client_id: uuid.UUID):
+    """Dialect-portable predicate matching rows whose details.client_id == cid.
+
+    client_id lives inside the JSONB `details` payload rather than a column, so
+    filtering is best-effort against the rows that recorded it there.
+    """
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        return AuditEntry.details["client_id"].astext == str(client_id)
+    return func.json_extract(AuditEntry.details, "$.client_id") == str(client_id)
+
+
+def _audit_row(entry: AuditEntry) -> AdminAuditRow:
+    details = entry.details if isinstance(entry.details, dict) else None
+    client_id: uuid.UUID | None = None
+    if details:
+        raw = details.get("client_id")
+        if raw:
+            try:
+                client_id = uuid.UUID(str(raw))
+            except (ValueError, AttributeError, TypeError):
+                client_id = None
+    return AdminAuditRow(
+        id=entry.id,
+        at=entry.at,
+        action=entry.action,
+        target_type=entry.target_type,
+        target_id=entry.target_id,
+        actor_user_id=entry.actor_user_id,
+        client_id=client_id,
+        details=details,
+        correlation_id=entry.correlation_id,
+    )
+
+
+@router.get(
+    "/audit",
+    response_model=AdminAuditListResponse,
+    summary="Append-only audit log with filters + pagination (admin)",
+)
+def audit_log(
+    _admin: Annotated[User, _admin_required],
+    db: Annotated[Session, Depends(get_db)],
+    client_id: uuid.UUID | None = None,
+    action: Annotated[str | None, Query(description="Exact action verb, e.g. user.created")] = None,
+    actor_user_id: uuid.UUID | None = None,
+    date_from: Annotated[
+        datetime | None, Query(description="Include entries at/after this time")
+    ] = None,
+    date_to: Annotated[
+        datetime | None, Query(description="Include entries at/before this time")
+    ] = None,
+    limit: Annotated[int, Query(ge=1, le=_AUDIT_MAX_LIMIT)] = _AUDIT_DEFAULT_LIMIT,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    format: Annotated[str | None, Query(description="'csv' for a text/csv download")] = None,
+) -> AdminAuditListResponse | Response:
+    """Query the append-only audit trail newest-first (H-7).
+
+    Filters (client_id, action, actor_user_id, date_from/date_to) compose with
+    AND. ?format=csv streams the current filter's matches as a CSV download
+    (bounded by the same limit/offset as the JSON page)."""
+    filters = []
+    if client_id is not None:
+        filters.append(_audit_client_filter(db, client_id))
+    if action is not None:
+        filters.append(AuditEntry.action == action)
+    if actor_user_id is not None:
+        filters.append(AuditEntry.actor_user_id == actor_user_id)
+    if date_from is not None:
+        filters.append(AuditEntry.at >= date_from)
+    if date_to is not None:
+        filters.append(AuditEntry.at <= date_to)
+
+    count_stmt = select(func.count()).select_from(AuditEntry)
+    for f in filters:
+        count_stmt = count_stmt.where(f)
+    total = db.execute(count_stmt).scalar_one()
+
+    stmt = select(AuditEntry)
+    for f in filters:
+        stmt = stmt.where(f)
+    stmt = stmt.order_by(AuditEntry.at.desc(), AuditEntry.id.desc()).limit(limit).offset(offset)
+    rows = [_audit_row(e) for e in db.execute(stmt).scalars().all()]
+
+    if (format or "").lower() == "csv":
+        import csv
+        import io
+
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(
+            [
+                "at",
+                "action",
+                "target_type",
+                "target_id",
+                "actor_user_id",
+                "client_id",
+                "correlation_id",
+            ]
+        )
+        for r in rows:
+            writer.writerow(
+                [
+                    r.at.isoformat(),
+                    r.action,
+                    r.target_type,
+                    str(r.target_id) if r.target_id else "",
+                    str(r.actor_user_id) if r.actor_user_id else "",
+                    str(r.client_id) if r.client_id else "",
+                    r.correlation_id or "",
+                ]
+            )
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=audit-log.csv"},
+        )
+
+    return AdminAuditListResponse(rows=rows, total=total, limit=limit, offset=offset)

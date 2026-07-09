@@ -68,6 +68,60 @@ def _tactic_name(tactic_id: str) -> str:
     return tactic_id
 
 
+# Status ordering for the prioritized gap list: an outright Gap outranks a
+# Partial (B-7).
+_STATUS_RANK: dict[str, int] = {
+    CoverageStatus.GAP.value: 0,
+    CoverageStatus.PARTIAL.value: 1,
+}
+
+
+def _ai_exec(assessment: AttackAssessment) -> tuple[str | None, list[str]]:
+    """Analyst-reviewed AI executive summary + top blind spots (E-4/B-7)."""
+    summaries = getattr(assessment, "ai_summaries", None)
+    if not isinstance(summaries, dict):
+        return None, []
+    summary = summaries.get("executive_summary")
+    summary = summary.strip() if isinstance(summary, str) and summary.strip() else None
+    blind = summaries.get("top_blind_spots")
+    blind_list = (
+        [b for b in blind if isinstance(b, str) and b.strip()] if isinstance(blind, list) else []
+    )
+    return summary, blind_list
+
+
+def _prioritized_gap_rows(ctx: AttackDeliverableContext) -> list[AttackCoverage]:
+    """ATT&CK weaknesses ordered by weakest tactic first (B-7).
+
+    Sort key: the technique's weakest tactic coverage % ascending, then status
+    (Gap before Partial), then technique code. Techniques whose tactic is not in
+    the catalog sort last. Both Gap and Partial statuses are surfaced so the
+    status tie-breaker is meaningful."""
+    tactic_pct = {tc.tactic_id: tc.coverage_pct for tc in ctx.rollup.by_tactic}
+
+    def _weakest_pct(code: str) -> float:
+        try:
+            tech = technique_by_id(code)
+        except KeyError:
+            return float("inf")
+        pcts = [tactic_pct[t] for t in tech.tactics if t in tactic_pct]
+        return min(pcts) if pcts else float("inf")
+
+    rows = [
+        c
+        for c in ctx.coverage
+        if c.status in (CoverageStatus.GAP.value, CoverageStatus.PARTIAL.value)
+    ]
+    rows.sort(
+        key=lambda c: (
+            _weakest_pct(c.technique_code),
+            _STATUS_RANK.get(c.status, 99),
+            c.technique_code,
+        )
+    )
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # XLSX
 # ---------------------------------------------------------------------------
@@ -217,6 +271,17 @@ def render_docx(ctx: AttackDeliverableContext) -> bytes:
     doc = new_document(f"{ctx.service_title} — {ctx.client_legal_name}")
     add_title(doc, ctx.service_title, ctx.client_legal_name)
 
+    ai_summary, blind_spots = _ai_exec(ctx.assessment)
+    if ai_summary or blind_spots:
+        add_heading(doc, "Executive summary")
+        lines = ["Analyst-reviewed draft (AI-assisted)."]
+        if ai_summary:
+            lines.append(ai_summary)
+        add_paragraphs(doc, lines)
+        if blind_spots:
+            add_heading(doc, "Top blind spots", level=2)
+            add_paragraphs(doc, [f"• {b}" for b in blind_spots])
+
     add_heading(doc, "Coverage summary")
     add_paragraphs(
         doc,
@@ -247,21 +312,24 @@ def render_docx(ctx: AttackDeliverableContext) -> bytes:
         ],
     )
 
-    gap_rows = [c for c in ctx.coverage if c.status == CoverageStatus.GAP.value]
-    gap_rows.sort(key=lambda c: c.technique_code)
-    gap_rows = gap_rows[:50]
-    add_heading(doc, f"Top remediation gaps ({len(gap_rows)} of {ctx.rollup.gap} shown)")
+    all_weak = _prioritized_gap_rows(ctx)
+    gap_rows = all_weak[:50]
+    add_heading(
+        doc,
+        f"Remediation priorities — ordered by weakest tactic "
+        f"({len(gap_rows)} of {len(all_weak)} shown)",
+    )
     if not gap_rows:
-        add_paragraphs(doc, ["No techniques flagged as Gap."])
+        add_paragraphs(doc, ["No techniques flagged as Gap or Partial."])
     else:
         rows = []
         for cov in gap_rows:
             try:
                 name = technique_by_id(cov.technique_code).name
             except KeyError:
-                name = ""
-            rows.append([cov.technique_code, name])
-        add_table(doc, ["Code", "Technique"], rows)
+                name = cov.technique_code
+            rows.append([cov.technique_code, name, _status_or_unscored(cov.status)])
+        add_table(doc, ["Code", "Technique", "Status"], rows)
 
     return to_bytes(doc)
 
@@ -298,6 +366,17 @@ def render_pdf(ctx: AttackDeliverableContext) -> bytes:
     story.append(Paragraph(ctx.service_title, h1))
     story.append(Paragraph(ctx.client_legal_name, body))
     story.append(Spacer(1, 0.2 * inch))
+
+    ai_summary, blind_spots = _ai_exec(ctx.assessment)
+    if ai_summary or blind_spots:
+        from xml.sax.saxutils import escape as _xml_escape
+
+        story.append(Paragraph("Executive summary", h2))
+        story.append(Paragraph("Analyst-reviewed draft (AI-assisted).", body))
+        if ai_summary:
+            story.append(Paragraph(_xml_escape(ai_summary), body))
+        for b in blind_spots:
+            story.append(Paragraph(f"• {_xml_escape(b)}", body))
 
     story.append(Paragraph("Coverage summary", h2))
     story.append(
@@ -348,29 +427,29 @@ def render_pdf(ctx: AttackDeliverableContext) -> bytes:
 
     story.append(PageBreak())
 
-    # Top-50 gap list.
-    gap_rows = [c for c in ctx.coverage if c.status == CoverageStatus.GAP.value]
-    gap_rows.sort(key=lambda c: c.technique_code)
-    gap_rows = gap_rows[:50]
+    # Prioritized weakness list ordered by weakest tactic (B-7), top 50.
+    all_weak = _prioritized_gap_rows(ctx)
+    gap_rows = all_weak[:50]
     story.append(
         Paragraph(
-            f"Top remediation gaps ({len(gap_rows)} of {ctx.rollup.gap} shown)",
+            f"Remediation priorities — ordered by weakest tactic "
+            f"({len(gap_rows)} of {len(all_weak)} shown)",
             h2,
         )
     )
     if not gap_rows:
-        story.append(Paragraph("No techniques flagged as Gap.", body))
+        story.append(Paragraph("No techniques flagged as Gap or Partial.", body))
     else:
-        gap_table_data: list[list] = [["Code", "Technique"]]
+        gap_table_data: list[list] = [["Code", "Technique", "Status"]]
         for cov in gap_rows:
             try:
                 name = technique_by_id(cov.technique_code).name
             except KeyError:
                 name = cov.technique_code
-            gap_table_data.append([cov.technique_code, name])
+            gap_table_data.append([cov.technique_code, name, _status_or_unscored(cov.status)])
         gap_table = Table(
             gap_table_data,
-            colWidths=[1.1 * inch, 4.6 * inch],
+            colWidths=[1.1 * inch, 3.6 * inch, 1.0 * inch],
             repeatRows=1,
         )
         gap_table.setStyle(_table_style())

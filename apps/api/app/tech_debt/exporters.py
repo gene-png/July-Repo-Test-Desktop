@@ -259,12 +259,16 @@ def render_xlsx(ctx: DeliverableContext) -> bytes:
         ws3.cell(row=r, column=4).number_format = "$#,##0"
     _widths(ws3, [12, 24, 12, 20, 12, 60])
 
-    # --- Sheet 4: Consolidation Plan ---
+    # --- Sheet 4: Consolidation Plan (B-6: per-item rows) ---
+    # The disposition/target/rationale come from the same consolidation engine
+    # the dashboard uses (CapabilityItem.disposition + consolidation_target_id).
     ws4 = wb.create_sheet("Consolidation Plan")
+    c = an.disposition_counts
+
+    # Summary block (kept above the per-item table).
     ws4.append(["Metric", "Value"])
     _style_header(ws4, 2)
-    c = an.disposition_counts
-    plan_rows = [
+    summary_rows = [
         ("Capabilities reviewed", len(ctx.items)),
         ("Functional categories", an.category_count),
         ("Overlap clusters (category)", len(overlap.by_category)),
@@ -275,13 +279,65 @@ def render_xlsx(ctx: DeliverableContext) -> bytes:
         ("Total annual cost", ctx.total_cost),
         ("Estimated annual savings", ctx.estimated_savings),
     ]
-    for label, val in plan_rows:
+    for label, val in summary_rows:
         ws4.append([label, val])
     ws4.cell(row=ws4.max_row - 1, column=2).number_format = "$#,##0"
     ws4.cell(row=ws4.max_row, column=2).number_format = "$#,##0"
     if not ctx.savings_cost_known:
         ws4.append(["Note", "Savings is a lower bound - one or more Cut rows lack a cost."])
-    _widths(ws4, [32, 24])
+
+    # Per-item plan table.
+    name_by_id = {str(it.id): it.name for it in ctx.items}
+    ws4.append([])
+    plan_header_row = ws4.max_row + 1
+    plan_header = [
+        "Item",
+        "Disposition",
+        "Consolidation Target",
+        "Rationale",
+        "Annual Savings (USD)",
+    ]
+    ws4.append(plan_header)
+    for col in range(1, len(plan_header) + 1):
+        cell = ws4.cell(row=plan_header_row, column=col)
+        cell.font = Font(bold=True)
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="left", vertical="center")
+
+    total_item_savings = 0.0
+    first_savings_row = ws4.max_row + 1
+    for it in ctx.items:
+        target_name = ""
+        target_id = getattr(it, "consolidation_target_id", None)
+        if target_id is not None:
+            target_name = name_by_id.get(str(target_id), "")
+        # Savings mirror the engine: only a Cut with a known cost realizes savings.
+        savings: float | str = ""
+        if it.disposition == CapabilityDisposition.CUT and it.annual_cost_usd is not None:
+            savings = float(it.annual_cost_usd)
+            total_item_savings += savings
+        ws4.append(
+            [
+                it.name,
+                _disposition_label(it.disposition),
+                target_name,
+                it.disposition_rationale or "",
+                savings,
+            ]
+        )
+    for r in range(first_savings_row, ws4.max_row + 1):
+        ws4.cell(row=r, column=5).number_format = "$#,##0"
+    total_row = ws4.max_row + 1
+    ws4.cell(row=total_row, column=1, value="Total").font = Font(bold=True)
+    tc = ws4.cell(row=total_row, column=5, value=total_item_savings)
+    tc.number_format = "$#,##0"
+    tc.font = Font(bold=True)
+    ws4.cell(
+        row=total_row + 1,
+        column=1,
+        value=("Savings cost known" if ctx.savings_cost_known else "Savings is a lower bound"),
+    ).font = Font(italic=True)
+    _widths(ws4, [28, 14, 24, 44, 20])
 
     out = io.BytesIO()
     wb.save(out)

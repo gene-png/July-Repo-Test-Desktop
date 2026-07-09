@@ -20,6 +20,7 @@ from app.models.capability import (
 )
 from app.models.client import Client
 from app.models.client_domain import ClientDomain
+from app.models.csf_action_item import CsfActionItem, CsfActionStatus
 from app.models.csf_assessment import (
     CsfAnswer,
     CsfAssessment,
@@ -54,6 +55,8 @@ __all__ = [
     "CapabilityListStatus",
     "Client",
     "ClientDomain",
+    "CsfActionItem",
+    "CsfActionStatus",
     "CsfAnswer",
     "CsfAssessment",
     "CsfAssessmentStatus",

@@ -55,31 +55,42 @@ function FinishIntakeLink(): JSX.Element {
   );
 }
 
+/** Terminal (client-visible "done") states. G-1: no in-app "release" concept. */
+function isTerminal(assessment: string | null, serviceStatus: string): boolean {
+  const s = assessment ?? serviceStatus;
+  return s === "approved" || s === "released";
+}
+
 function statusTone(
   assessment: string | null,
   serviceStatus: string,
 ): "info" | "warning" | "success" | "neutral" {
   const s = assessment ?? serviceStatus;
-  if (s === "released") return "success";
-  if (s === "approved") return "success";
+  if (isTerminal(assessment, serviceStatus)) return "success";
   if (s === "submitted") return "warning";
   if (s === "draft" || s === "in_progress") return "info";
   return "neutral";
 }
 
+/** Short chip label. G-1: terminal states read "Complete", never "released". */
 function statusLabel(e: AssessmentResponse): string {
+  if (isTerminal(e.assessment_status, e.status)) return "Complete";
   switch (e.assessment_status) {
     case "draft":
       return "In progress — not submitted";
     case "submitted":
       return "Submitted — under review";
-    case "approved":
-      return "Approved";
-    case "released":
-      return "Report released";
     default:
-      return e.status === "released" ? "Released" : "In progress";
+      return "In progress";
   }
+}
+
+/** Sentence shown beneath the chip for terminal states (G-1 delivery note). */
+function statusDescription(e: AssessmentResponse): string | null {
+  if (isTerminal(e.assessment_status, e.status)) {
+    return "Complete: your consultant will deliver your report.";
+  }
+  return null;
 }
 
 export function AssessmentsView(): JSX.Element {
@@ -355,6 +366,11 @@ export function AssessmentsView(): JSX.Element {
                         <p className="text-sm text-ink-secondary">
                           {SERVICE_LABELS[e.service_type]}
                         </p>
+                        {statusDescription(e) ? (
+                          <p className="mt-1 text-sm text-ink-secondary">
+                            {statusDescription(e)}
+                          </p>
+                        ) : null}
                       </div>
                       <div className="flex items-center gap-3">
                         <StatusPill

@@ -64,6 +64,7 @@ from app.middleware.ratelimit import rate_limit_user
 from app.models._common import utcnow
 from app.models.artifact import Artifact, ArtifactOrigin
 from app.models.client import Client
+from app.models.csf_action_item import CsfActionItem, CsfActionStatus
 from app.models.csf_assessment import (
     CsfAnswer,
     CsfAssessment,
@@ -82,6 +83,9 @@ from app.schemas.csf import (
     CatalogResponse,
     CatalogSubcategory,
     CatalogTier,
+    CsfActionItemCreate,
+    CsfActionItemPatch,
+    CsfActionItemResponse,
     CsfAnswerPatch,
     CsfAnswerResponse,
     CsfAssessmentResponse,
@@ -108,6 +112,7 @@ from app.schemas.csf import (
 from app.schemas.tech_debt import DeliverableResponse
 from app.storage import StorageBackend
 from app.tech_debt.filename import (
+    SERVICE_SLUG_CSF_PLAYBOOK,
     SERVICE_SLUG_NIST_CSF,
     deliverable_filename,
 )
@@ -427,6 +432,7 @@ def latest_assessment(
         )
     # Phase 4 keeps assessment scoreboards admin-only until the
     # deliverable is released to the client (mirrors Phase 3 stage 9).
+    # RELEASED is deprecated for v1 (no in-app release; G-1)
     if user.role != UserRole.ADMIN and assessment.status != CsfAssessmentStatus.RELEASED:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -672,6 +678,157 @@ def approve_assessment(
     db.commit()
     db.refresh(a)
     return _serialize_assessment(db, a)
+
+
+# ---------------------------------------------------------------------------
+# Action plan (H-8) — admin-managed remediation tasks, client-invisible
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/assessments/{assessment_id}/action-items",
+    response_model=CsfActionItemResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a remediation action item for an assessment (admin)",
+)
+def create_action_item(
+    assessment_id: uuid.UUID,
+    body: CsfActionItemCreate,
+    user: Annotated[User, _admin_required],
+    client: Annotated[Client, Depends(current_client)],
+    db: Annotated[Session, Depends(get_db)],
+) -> CsfActionItemResponse:
+    a = require_csf_assessment_in_tenant(db, assessment_id, client.id)
+    if body.subcategory_code not in all_codes():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Unknown subcategory code.",
+        )
+    item = CsfActionItem(
+        assessment_id=a.id,
+        client_id=client.id,
+        subcategory_code=body.subcategory_code,
+        owner=body.owner,
+        due_date=body.due_date,
+        milestone=body.milestone,
+        status=body.status,
+        created_by=user.id,
+    )
+    db.add(item)
+    db.flush()
+    audit(
+        db,
+        action="csf.action_item.created",
+        target_type="csf_action_item",
+        target_id=item.id,
+        actor_user_id=user.id,
+        details={
+            "assessment_id": str(a.id),
+            "subcategory_code": item.subcategory_code,
+        },
+    )
+    db.commit()
+    db.refresh(item)
+    return CsfActionItemResponse.model_validate(item, from_attributes=True)
+
+
+@router.get(
+    "/assessments/{assessment_id}/action-items",
+    response_model=list[CsfActionItemResponse],
+    summary="List remediation action items for an assessment (admin)",
+)
+def list_action_items(
+    assessment_id: uuid.UUID,
+    _user: Annotated[User, _admin_required],
+    client: Annotated[Client, Depends(current_client)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[CsfActionItemResponse]:
+    a = require_csf_assessment_in_tenant(db, assessment_id, client.id)
+    rows = (
+        db.execute(
+            select(CsfActionItem)
+            .where(CsfActionItem.assessment_id == a.id)
+            .order_by(CsfActionItem.created_at)
+        )
+        .scalars()
+        .all()
+    )
+    return [CsfActionItemResponse.model_validate(r, from_attributes=True) for r in rows]
+
+
+@router.patch(
+    "/action-items/{item_id}",
+    response_model=CsfActionItemResponse,
+    summary="Update a remediation action item (admin)",
+)
+def patch_action_item(
+    item_id: uuid.UUID,
+    body: CsfActionItemPatch,
+    user: Annotated[User, _admin_required],
+    client: Annotated[Client, Depends(current_client)],
+    db: Annotated[Session, Depends(get_db)],
+) -> CsfActionItemResponse:
+    data = body.model_dump(exclude_unset=True)
+    if not data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one field is required.",
+        )
+    item = db.get(CsfActionItem, item_id)
+    if item is None or item.client_id != client.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Action item not found.",
+        )
+    if "owner" in data:
+        item.owner = data["owner"]
+    if "due_date" in data:
+        item.due_date = data["due_date"]
+    if "milestone" in data:
+        item.milestone = data["milestone"]
+    if "status" in data and data["status"] is not None:
+        item.status = CsfActionStatus(data["status"])
+    audit(
+        db,
+        action="csf.action_item.updated",
+        target_type="csf_action_item",
+        target_id=item.id,
+        actor_user_id=user.id,
+        details={"fields": sorted(data.keys())},
+    )
+    db.commit()
+    db.refresh(item)
+    return CsfActionItemResponse.model_validate(item, from_attributes=True)
+
+
+@router.delete(
+    "/action-items/{item_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a remediation action item (admin)",
+)
+def delete_action_item(
+    item_id: uuid.UUID,
+    user: Annotated[User, _admin_required],
+    client: Annotated[Client, Depends(current_client)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    item = db.get(CsfActionItem, item_id)
+    if item is None or item.client_id != client.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Action item not found.",
+        )
+    audit(
+        db,
+        action="csf.action_item.deleted",
+        target_type="csf_action_item",
+        target_id=item.id,
+        actor_user_id=user.id,
+        details={"assessment_id": str(item.assessment_id)},
+    )
+    db.delete(item)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ---------------------------------------------------------------------------
@@ -1321,16 +1478,43 @@ def export_playbook(
 
     org = None if client.legal_name == "(pending intake)" else client.legal_name
     name = org or "Client"
-    base = f"CSF_Playbook_v{a.version}"
     on = utcnow().strftime("%Y-%m-%d")
+    today = utcnow().date()
+
+    # B-7: playbook filenames route through the §15.5 deliverable_filename helper
+    # (company + service slug + date) instead of a bare "CSF_Playbook_v{n}".
+    def _pb_name(qualifier: str, ext: str) -> str:
+        fname = deliverable_filename(
+            company=org,
+            service_slug=SERVICE_SLUG_CSF_PLAYBOOK,
+            extension=ext,
+            day=today,
+            version=a.version,
+        )
+        if qualifier:
+            stem, _, e = fname.rpartition(".")
+            return f"{stem}_{qualifier}.{e}"
+        return fname
+
     xlsx_mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     pdf_mime = "application/pdf"
+
+    # H-8: action items for this assessment feed the "Action Plan" sheet.
+    action_items = (
+        db.execute(
+            select(CsfActionItem)
+            .where(CsfActionItem.assessment_id == a.id)
+            .order_by(CsfActionItem.created_at)
+        )
+        .scalars()
+        .all()
+    )
 
     specs = [
         (
             "xlsx",
             "Data workbook (XLSX)",
-            f"{base}.xlsx",
+            _pb_name("", "xlsx"),
             xlsx_mime,
             csf_playbook_export.render_xlsx(
                 client_name=name,
@@ -1340,12 +1524,13 @@ def export_playbook(
                 unscored_keys=frozenset(
                     (r.tier, r.subcategory_code) for r in all_rows if r.scored_at is None
                 ),
+                action_items=action_items,
             ),
         ),
         (
             "exec_pdf",
             "Executive briefing (PDF)",
-            f"{base}_Executive.pdf",
+            _pb_name("Executive", "pdf"),
             pdf_mime,
             csf_playbook_export.render_exec_pdf(
                 client_name=name,
@@ -1357,7 +1542,7 @@ def export_playbook(
         (
             "exec_docx",
             "Executive briefing (Word)",
-            f"{base}_Executive.docx",
+            _pb_name("Executive", "docx"),
             DOCX_MIME,
             csf_playbook_export.render_exec_docx(
                 client_name=name,
@@ -1369,7 +1554,7 @@ def export_playbook(
         (
             "full_pdf",
             "Full playbook (PDF)",
-            f"{base}_Full.pdf",
+            _pb_name("Full", "pdf"),
             pdf_mime,
             csf_playbook_export.render_full_pdf(
                 client_name=name,
@@ -1381,7 +1566,7 @@ def export_playbook(
         (
             "full_docx",
             "Full playbook (Word)",
-            f"{base}_Full.docx",
+            _pb_name("Full", "docx"),
             DOCX_MIME,
             csf_playbook_export.render_full_docx(
                 client_name=name,
@@ -1530,7 +1715,8 @@ def finalize_csf_deliverable(
     # falling back to the engine default (T3) only when the intake goal is
     # absent (B-2). The summary line and exporters print the resolved tier.
     target_tier = _client_target_tier(db, svc.id) or DEFAULT_TARGET_TIER
-    gap = analyze_gaps(tier_map, notes=notes_map, target_tier=target_tier)
+    # B-4: full gap list in the XLSX Gap Plan; the PDF/DOCX narrative caps at 20.
+    gap = analyze_gaps(tier_map, notes=notes_map, target_tier=target_tier, top_n=None)
 
     client_name = client.legal_name
     if client_name == "(pending intake)":

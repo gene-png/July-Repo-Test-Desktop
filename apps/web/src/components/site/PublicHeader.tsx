@@ -37,6 +37,16 @@ export async function PublicHeader(): Promise<JSX.Element> {
               >
                 My Assessments
               </Link>
+              {role === "client" ? (
+                // D-4: keep intake reachable for client users (acceptable per
+                // tasking: always visible for the client role).
+                <Link
+                  href="/intake"
+                  className="rounded-md px-3 py-2 font-medium text-ink-secondary hover:text-ink-primary"
+                >
+                  Intake
+                </Link>
+              ) : null}
               <Link
                 href="/messages"
                 className="rounded-md px-3 py-2 font-medium text-ink-secondary hover:text-ink-primary"
