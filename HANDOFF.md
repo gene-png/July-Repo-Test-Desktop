@@ -53,9 +53,9 @@ All four recommended items were executed and committed:
 
 ## Issues still open
 
-- MFA (TOTP) and email verification: the remaining D-017 scope.
+- MFA (TOTP) and email verification: DONE in commit f8b1eb7 (enrollment, activation, challenge login, disable; hashed email-verify tokens with resend; frontend flows). The only remaining D-017 item is server-side require-MFA enforcement (the flag currently drives a frontend nudge only).
 - The Postgres advisory lock gates entry to concurrent AI runs but does not span the whole run, because E-1 releases the DB connection during the provider call. Near-simultaneous duplicate starts are blocked; a second run started mid-call proceeds. A session-scoped lock or a DB status flag would close this; noted as a deliberate trade-off.
-- Real two-transaction advisory-lock contention is untested (the unit suite runs SQLite); verify once an integration environment with Postgres-backed tests exists.
+- Real two-transaction advisory-lock contention: DONE in commit f8b1eb7 (apps/api/tests/integration, 3/3 against live Postgres, wired into the CI restore-drill job).
 - The rate limiter uses in-memory buckets when Redis is unreachable, which is per-process; fine for the single-process deployment, revisit for replicas.
 - The new CI e2e and restore-drill jobs are authored and locally verified but will first actually execute on GitHub once the branch is pushed.
 - Tailwind 4 changed some visual defaults (bare border/ring colors and widths); the e2e suite verifies structure and function, not pixels. A quick visual pass is worthwhile.
