@@ -2,7 +2,7 @@
 
 Date: July 9, 2026
 Branch: remediation/fable (not pushed, per instructions)
-Base: 5161996 (main). Four commits: a932911 (Sprint 0), 2b7bc51 (Sprint 1), 243f812 (Sprint 2), 6c859dc (Sprint 3), plus this handoff commit.
+Base: 5161996 (main). Remediation commits: a932911 (Sprint 0), 2b7bc51 (Sprint 1), 243f812 (Sprint 2), 6c859dc (Sprint 3), d2d2f45 (handoff). Follow-on sprint commits: 51b11bd (CI e2e + restore-drill jobs), 966a5c1 (D-017 auth package), dea51c1 (framework majors), 9966f18 (live-mode verification).
 Full detail per fix, with evidence, lives in FABLE_REMEDIATION_PLAN.md (Findings, Actions, Build Plan, Live Validation, Evidence).
 
 ## Summary of fixes completed
@@ -42,13 +42,23 @@ Ten Opus implementation/QA subagents under FABLE lead orchestration: S1-A (AI co
 
 19 e2e tests, all passing against the real local stack (Postgres/Redis/MinIO in Docker, migrated to head, seeded demo data, uvicorn API, next start web): smoke (2), Sprint 1 (extraction error pill through the UI, .xls rejection, export gate 409), Sprint 2 (client reply click-path, admin switcher recovery, banner copy, simulated pill after a real UI Run AI, preview-no-audit-row, friendly intake errors with link), Sprint 3 (risk governance gate plus the full generate-edit-lock-regenerate-approve-export loop with artifact download, auth redirect, dev-preview gating, Active Work links, Complete copy with no release fiction, audit viewer with CSV). Traces retained on failure during development; final suite green twice consecutively.
 
+## Follow-on sprint (completed after the handoff, same day)
+
+All four recommended items were executed and committed:
+
+1. CI wiring (51b11bd): the workflow now has an e2e job (Postgres/Redis/MinIO services, migrate, seed, uvicorn + next start, the full Playwright suite, failure artifacts) and a restore-drill job; command forms verified locally before committing.
+2. Auth package D-017 (966a5c1): refresh-token rotation with reuse detection and family revocation (30s configurable grace window for benign concurrent-refresh races), server-side logout revocation, and enforced idle-timeout and forced-re-auth limits (migration 0037). Docs flipped from "planned" to enforced; 10 new tests; verified live against the running API. Remaining D-017 scope: MFA (TOTP) and email verification.
+3. Framework majors (dea51c1): Next 16.2.10, React 19.2.7, Tailwind 4.3.2, ESLint 9 flat config in one pass; next-auth stayed on v4 (4.24.14 supports Next 16 + React 19); 180 files codemodded; all 19 Playwright tests green on the upgraded stack.
+4. Live-mode verification (9966f18): with a real API key, all 5 gated smoke tests pass and a full five-job dry run succeeded on the demo tenant (extraction with $-cost parsing, 106-field CSF scoring, ZT with persisted narratives, 934-change full-matrix ATT&CK with zero failed batches, 13-entry risk synthesis with the locked entry preserved). The preview-ack gate, per-tenant usage report (~$0.99 attributed), and the Haiku/Sonnet split in llm_calls all verified live. The smoke run caught and fixed a real bug: claude-haiku-4-5 caps output at 64000 tokens, so the two Haiku jobs' 128000 request 400ed on every live call.
+
 ## Issues still open
 
-- Live-mode smoke against the real Anthropic API was not run (no API key in this environment). The env-gated test module is ready: SHIELD_LIVE_SMOKE=1 ANTHROPIC_API_KEY=... pytest apps/api/tests/unit/test_live_smoke.py.
+- MFA (TOTP) and email verification: the remaining D-017 scope.
 - The Postgres advisory lock gates entry to concurrent AI runs but does not span the whole run, because E-1 releases the DB connection during the provider call. Near-simultaneous duplicate starts are blocked; a second run started mid-call proceeds. A session-scoped lock or a DB status flag would close this; noted as a deliberate trade-off.
 - Real two-transaction advisory-lock contention is untested (the unit suite runs SQLite); verify once an integration environment with Postgres-backed tests exists.
-- CI (.github/workflows/ci.yml) still runs unit tests only; the Playwright suite and the restore drill run locally via documented commands but are not yet CI jobs.
 - The rate limiter uses in-memory buckets when Redis is unreachable, which is per-process; fine for the single-process deployment, revisit for replicas.
+- The new CI e2e and restore-drill jobs are authored and locally verified but will first actually execute on GitHub once the branch is pushed.
+- Tailwind 4 changed some visual defaults (bare border/ring colors and widths); the e2e suite verifies structure and function, not pixels. A quick visual pass is worthwhile.
 
 ## Risks and assumptions
 
@@ -59,7 +69,7 @@ Ten Opus implementation/QA subagents under FABLE lead orchestration: S1-A (AI co
 
 ## Recommended next sprint
 
-1. Turn the local gates into CI: a compose-based job running alembic upgrade, seed, the Playwright suite, and make restore-drill.
-2. Live-mode verification: run the gated smoke tests with a real key, then a paid-engagement dry run of all five jobs on a demo tenant, reviewing llm_calls costs in /admin/ai-usage.
-3. The deferred auth package (D-017): refresh-token rotation and revocation first, then idle timeout and forced re-auth, then MFA; the doc claims are already retracted so the work is cleanly scoped.
-4. The framework-majors bundle as its own e2e-netted pass.
+1. Push the branch and confirm the new CI e2e and restore-drill jobs pass on GitHub runners.
+2. MFA (TOTP enrollment + verification) and email verification, completing D-017.
+3. A visual QA pass for Tailwind 4 default changes, plus a Postgres-backed integration test environment for advisory-lock contention.
+4. Rotate the API key used for the live verification (it was pasted into a chat session; treat it as exposed).
