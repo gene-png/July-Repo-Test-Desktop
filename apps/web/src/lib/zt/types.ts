@@ -81,6 +81,8 @@ export interface ZtRunAiResponse {
   pillar_narratives: Record<string, string>;
   executive_summary: string | null;
   roadmap_summary: string | null;
+  /** "fixture" when the result came from deterministic demo fixtures. */
+  mode?: "fixture" | "live";
 }
 
 export interface PillarScore {

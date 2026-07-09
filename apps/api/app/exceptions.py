@@ -23,6 +23,8 @@ def _correlation_id_from(request: Request) -> str:
 
 
 async def _handle_http_exception(request: Request, exc: HTTPException) -> JSONResponse:
+    # Preserve response headers set on the exception (e.g. Retry-After on a 429
+    # from the rate limiter). Starlette's HTTPException carries `.headers`.
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -32,6 +34,7 @@ async def _handle_http_exception(request: Request, exc: HTTPException) -> JSONRe
                 "correlation_id": _correlation_id_from(request),
             }
         },
+        headers=getattr(exc, "headers", None),
     )
 
 
@@ -43,6 +46,21 @@ async def _handle_validation_error(request: Request, exc: RequestValidationError
                 "code": 422,
                 "message": "Request validation failed.",
                 "details": exc.errors(),
+                "correlation_id": _correlation_id_from(request),
+            }
+        },
+    )
+
+
+async def _handle_llm_timeout(request: Request, exc: Exception) -> JSONResponse:
+    # Task S2-A E-1: a whole-call AI deadline expired. Nothing was applied, so
+    # this is a clean 504 rather than a 500.
+    return JSONResponse(
+        status_code=504,
+        content={
+            "error": {
+                "code": 504,
+                "message": "the AI call timed out; nothing was changed",
                 "correlation_id": _correlation_id_from(request),
             }
         },
@@ -70,6 +88,9 @@ async def _handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
 
 
 def register_exception_handlers(app: FastAPI) -> None:
+    from app.ai.llm import LLMTimeoutError
+
     app.add_exception_handler(HTTPException, _handle_http_exception)
     app.add_exception_handler(RequestValidationError, _handle_validation_error)
+    app.add_exception_handler(LLMTimeoutError, _handle_llm_timeout)
     app.add_exception_handler(Exception, _handle_unexpected)

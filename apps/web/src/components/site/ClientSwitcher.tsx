@@ -25,7 +25,17 @@ interface ClientListResponse {
   clients: ClientSummary[];
 }
 
-export function ClientSwitcher(): JSX.Element | null {
+export interface ClientSwitcherProps {
+  /** Called after the active-client cookie is updated. Lets client
+   * components that read the tenant on mount (Risk Register, Inbox)
+   * reload their data — router.refresh() alone only re-renders server
+   * components, so without this the page stays on its empty state. */
+  onChanged?: (clientId: string | null) => void;
+}
+
+export function ClientSwitcher({
+  onChanged,
+}: ClientSwitcherProps = {}): JSX.Element | null {
   const router = useRouter();
   const [clients, setClients] = useState<ClientSummary[] | null>(null);
   const [active, setActive] = useState<string | null>(null);
@@ -72,6 +82,7 @@ export function ClientSwitcher(): JSX.Element | null {
       if (res.ok) {
         setActive(next || null);
         router.refresh();
+        onChanged?.(next || null);
       }
     } finally {
       setLoading(false);

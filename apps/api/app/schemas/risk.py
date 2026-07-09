@@ -66,3 +66,6 @@ class RiskRegisterResponse(BaseModel):
     # Non-fatal advisories from the last generate (Task S1-A A-4), e.g. a count
     # of entries whose likelihood/impact the model returned in an unknown form.
     warnings: list[str] = []
+    # E-5: "fixture" (simulated) or "live" for the last generate; None on a
+    # plain latest/export read that didn't run the model.
+    mode: str | None = None

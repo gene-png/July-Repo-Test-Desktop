@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 
 import {
   Card,
@@ -15,6 +14,7 @@ import {
   type DataTableColumn,
 } from "@shield/design-system";
 
+import { ClientSwitcher } from "@/components/site/ClientSwitcher";
 import {
   describeRiskError,
   exportRiskRegister,
@@ -151,9 +151,15 @@ export function RiskRegisterDashboard(): JSX.Element {
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState<"generate" | "export" | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  // Bumped by the inline ClientSwitcher after a selection so the dashboard
+  // reloads for the new tenant (the switcher's router.refresh() alone does
+  // not rerun this client-side effect).
+  const [reloadKey, setReloadKey] = React.useState(0);
 
   React.useEffect(() => {
     let active = true;
+    setLoading(true);
+    setError(null);
     (async () => {
       try {
         const id = await getActiveClientId();
@@ -181,7 +187,7 @@ export function RiskRegisterDashboard(): JSX.Element {
     return () => {
       active = false;
     };
-  }, []);
+  }, [reloadKey]);
 
   async function onGenerate(): Promise<void> {
     if (!cid) return;
@@ -217,14 +223,12 @@ export function RiskRegisterDashboard(): JSX.Element {
     return (
       <EmptyState
         title="Pick a client first"
-        description="The Risk Register is generated per client. Choose a client from the switcher, then return here."
+        description="The Risk Register is generated per client. Choose a client to continue."
         action={
-          <Link
-            href="/admin/management"
-            className="rounded-md bg-brand-500 px-4 py-2 text-sm font-semibold text-ink-on-accent hover:bg-brand-600"
-          >
-            Go to Management
-          </Link>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-ink-secondary">Pick a client:</span>
+            <ClientSwitcher onChanged={() => setReloadKey((k) => k + 1)} />
+          </div>
         }
       />
     );

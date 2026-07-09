@@ -159,8 +159,12 @@ def test_create_assessment_increments_version(app_client) -> None:
     c = app_client
     admin = register_admin(c, "admin@example.com")
     bearer = admin["tokens"]["access_token"]
+    h = {"Authorization": f"Bearer {bearer}"}
     svc_id = _open_service(c, bearer)
     v1 = _new_assessment(c, bearer, svc_id)
+    # E-3 open-draft guard: a new version is only minted once the current
+    # assessment leaves its pre-approval working status. Approve v1 first.
+    assert c.post(f"/csf/assessments/{v1['id']}/approve", headers=h).status_code == 200
     v2 = _new_assessment(c, bearer, svc_id)
     assert v1["version"] == 1
     assert v2["version"] == 2

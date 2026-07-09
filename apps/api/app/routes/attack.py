@@ -19,13 +19,15 @@ import uuid
 from collections.abc import Iterable
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.ai.contracts import validate_response
 from app.ai.diff import diff_keyed_rows
 from app.ai.engine import run_job
-from app.ai.llm import LLMClient
+from app.ai.llm import LLMClient, LLMTimeoutError, has_preview_ack
 from app.attack.analytics import compute as compute_heatmap
 from app.attack.catalog import (
     TACTICS,
@@ -40,9 +42,10 @@ from app.attack.exporters import render_docx as render_attack_docx
 from app.attack.exporters import render_pdf as render_attack_pdf
 from app.attack.exporters import render_xlsx as render_attack_xlsx
 from app.audit import audit
-from app.db.session import get_db
+from app.db.session import assessment_advisory_lock, get_db
 from app.dependencies import current_client, current_user, require_role
 from app.logging import get_logger
+from app.middleware.ratelimit import rate_limit_user
 from app.models._common import utcnow
 from app.models.artifact import Artifact, ArtifactOrigin
 from app.models.attack_assessment import (
@@ -75,6 +78,7 @@ from app.schemas.tech_debt import DeliverableResponse
 from app.storage import StorageBackend
 from app.tech_debt.filename import SERVICE_SLUG_ATTACK, deliverable_filename
 from app.tenant import (
+    require_artifact_in_tenant,
     require_attack_assessment_in_tenant,
     require_service_in_tenant,
 )
@@ -82,6 +86,8 @@ from app.tenant import (
 router = APIRouter(prefix="/attack", tags=["attack"])
 
 _admin_required = Depends(require_role(UserRole.ADMIN))
+# H-2: per-user token-bucket limiter on the AI run endpoint.
+_ai_rate_limited = Depends(rate_limit_user())
 _log = get_logger(__name__)
 
 
@@ -130,6 +136,7 @@ def _serialize_assessment(db: Session, a: AttackAssessment) -> AttackAssessmentR
         approved_by=a.approved_by,
         documents_stale=a.documents_stale,
         coverage=_serialize_coverage(rows),
+        ai_summaries=a.ai_summaries,
     )
 
 
@@ -236,19 +243,12 @@ def get_catalog(
 # ---------------------------------------------------------------------------
 
 
-@router.post(
-    "/services/{service_id}/assessments",
-    response_model=AttackAssessmentResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Create a new draft ATT&CK coverage assessment (admin)",
-)
-def create_assessment(
-    service_id: uuid.UUID,
-    user: Annotated[User, _admin_required],
-    client: Annotated[Client, Depends(current_client)],
-    db: Annotated[Session, Depends(get_db)],
-) -> AttackAssessmentResponse:
-    svc = require_service_in_tenant(db, service_id, client.id, kind=ServiceKind.ATTACK_COVERAGE)
+def _new_assessment(db: Session, svc: Service, client: Client, user: User) -> AttackAssessment:
+    """Mint a fresh draft ATT&CK assessment + seeded coverage rows (F-2).
+
+    Adds to the session and flushes (caller commits); shared by create-assessment
+    and the run-ai auto-create path.
+    """
     prior = _latest_assessment(db, svc.id)
     version = (prior.version + 1) if prior else 1
     assessment = AttackAssessment(
@@ -278,6 +278,31 @@ def create_assessment(
         actor_user_id=user.id,
         details={"service_id": str(svc.id), "version": version},
     )
+    db.flush()
+    return assessment
+
+
+@router.post(
+    "/services/{service_id}/assessments",
+    response_model=AttackAssessmentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new draft ATT&CK coverage assessment (admin)",
+)
+def create_assessment(
+    service_id: uuid.UUID,
+    user: Annotated[User, _admin_required],
+    client: Annotated[Client, Depends(current_client)],
+    db: Annotated[Session, Depends(get_db)],
+    response: Response,
+) -> AttackAssessmentResponse:
+    svc = require_service_in_tenant(db, service_id, client.id, kind=ServiceKind.ATTACK_COVERAGE)
+    prior = _latest_assessment(db, svc.id)
+    # E-3 open-draft guard: ATT&CK's only pre-approval working status is DRAFT.
+    # Return the in-progress assessment as-is (200) rather than a new version.
+    if prior is not None and prior.status == AttackAssessmentStatus.DRAFT:
+        response.status_code = status.HTTP_200_OK
+        return _serialize_assessment(db, prior)
+    assessment = _new_assessment(db, svc, client, user)
     db.commit()
     db.refresh(assessment)
     return _serialize_assessment(db, assessment)
@@ -359,7 +384,10 @@ def patch_coverage(
     if "notes" in data:
         row.notes = data["notes"]
     if "evidence_artifact_id" in data:
-        row.evidence_artifact_id = data["evidence_artifact_id"]
+        ev = data["evidence_artifact_id"]
+        if ev is not None:
+            require_artifact_in_tenant(db, ev, client.id)
+        row.evidence_artifact_id = ev
     if data.get("locked") is not None:
         row.locked = bool(data["locked"])
     for f in ("detection_tools", "prevention_tools", "response_tools", "rationale"):
@@ -458,6 +486,7 @@ _DIFF_FIELDS = (
     "/services/{service_id}/run-ai",
     response_model=AttackRunAiResponse,
     summary="Run the mitre_map AI job: suggest coverage + D/P/R per technique (admin)",
+    dependencies=[_ai_rate_limited],
 )
 def run_ai(
     service_id: uuid.UUID,
@@ -465,6 +494,9 @@ def run_ai(
     client: Annotated[Client, Depends(current_client)],
     db: Annotated[Session, Depends(get_db)],
     llm: Annotated[LLMClient, Depends(_llm_dep)],
+    preview: Annotated[
+        bool, Query(description="Dry-run: return the redacted payload only")
+    ] = False,
 ) -> AttackRunAiResponse:
     """The ATT&CK 'Run AI'. Suggests coverage status + which listed tools provide
     Detection / Prevention / Response per technique, validating every cited tool
@@ -473,14 +505,35 @@ def run_ai(
     """
     svc = require_service_in_tenant(db, service_id, client.id, kind=ServiceKind.ATTACK_COVERAGE)
     a = _latest_assessment(db, svc.id)
+    auto_created = False
     if a is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Create an assessment first."
-        )
+        # F-2: auto-create a seeded draft assessment (mirrors create-assessment)
+        # rather than 404-ing; the open-draft guard makes a later create idempotent.
+        a = _new_assessment(db, svc, client, user)
+        auto_created = True
     if a.status in (AttackAssessmentStatus.APPROVED, AttackAssessmentStatus.RELEASED):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="This assessment is locked."
         )
+    # H-6: a live (non-preview) run requires a recorded redaction-preview ack.
+    if not preview and llm.mode == "live" and not has_preview_ack(db, client.id):
+        raise HTTPException(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            detail="Redaction preview acknowledgment required for this client before live AI runs",
+        )
+    # F-2/E-1: persist an auto-created assessment before the E-1 db.close()
+    # below (which discards uncommitted work). A preview never commits it.
+    if auto_created and not preview:
+        db.commit()
+    # E-3: serialize concurrent runs for this assessment (409 loser on Postgres).
+    if not preview:
+        assessment_advisory_lock(db, a.id)
+    aid = a.id
+    svc_id = svc.id
+    client_id = client.id
+    # Capture the actor id as a plain value: an auto-create commit above expires
+    # the dependency-loaded `user`, and the E-1 db.close() below detaches it.
+    user_id = user.id
 
     tools = _client_tool_names(db, client.id)
     valid_tools = {t.lower() for t in tools}
@@ -496,7 +549,7 @@ def run_ai(
     }
     locked_keys = frozenset(code for code, r in rows.items() if r.locked)
 
-    def _snap() -> dict[str, dict]:
+    def _snap_rows(row_map: dict) -> dict[str, dict]:
         return {
             code: {
                 "status": r.status,
@@ -505,45 +558,72 @@ def run_ai(
                 "response_tools": list(r.response_tools or []),
                 "rationale": r.rationale,
             }
-            for code, r in rows.items()
+            for code, r in row_map.items()
         }
 
-    before = _snap()
+    # E-1: snapshot + technique codes to plain data before releasing the session.
+    before = _snap_rows(rows)
+    technique_codes = sorted(rows)
     client_org = None if client.legal_name == "(pending intake)" else client.legal_name
+    inputs = {"capability_list": tools, "technique_codes": technique_codes}
 
-    # MITRE ATT&CK Enterprise is 600+ techniques. Asking the model to score every
-    # technique in one request produces a response far larger than a single
-    # completion can hold, and the long-running non-streaming call gets dropped
-    # by the API ("server disconnected without sending a response"). Batch the
-    # technique codes into small chunks so each call is fast and reliable; each
-    # chunk writes its own llm_calls row for audit.
+    # H-6: preview short-circuits before any provider call or llm_calls row.
+    if preview:
+        prev = llm.preview(purpose="mitre_map", inputs=inputs, client_org_name=client_org)
+        return JSONResponse({"preview": True, **prev})
+
     # One large AI call scores every technique at once. The LLM client streams
     # the response (app.ai.llm), so even the full 600+ technique map returns in
     # a single request without hitting the non-streaming timeout or a dropped
     # connection. run_job records the llm_calls row; on an upstream failure it
     # re-raises, which we translate into a clean 502 rather than a 500 stack.
+    # E-1: release the request connection during the provider call.
     failed_batches = 0
+    db.close()
     try:
         result = run_job(
             db,
             llm,
             "mitre_map",
-            inputs={"capability_list": tools, "technique_codes": sorted(rows)},
-            requested_by=user.id,
-            service_id=svc.id,
+            inputs=inputs,
+            requested_by=user_id,
+            service_id=svc_id,
+            client_id=client_id,
             client_org_name=client_org,
         )
+    except LLMTimeoutError:
+        # E-1: a whole-call deadline is a clean 504 (handled globally), never the
+        # generic 502 below.
+        raise
     except Exception as exc:  # noqa: BLE001 - boundary: surface a clean error
         _log.warning(
             "attack_run_ai_failed",
-            service_id=str(svc.id),
+            service_id=str(svc_id),
             error=f"{type(exc).__name__}: {exc}",
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="The AI provider was unreachable. Please retry.",
         ) from exc
-    suggestions = list((result.data or {}).get("techniques", []))
+    # A-6: reject a wrong-shape response before the apply loop. Raised outside the
+    # broad catch above so it surfaces as a clean 502 (LLMTimeoutError stays 504).
+    problems = validate_response("mitre_map", result.data)
+    if problems:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="AI response failed validation: " + "; ".join(problems),
+        )
+    data = result.data if isinstance(result.data, dict) else {}
+    suggestions = list(data.get("techniques", []))
+
+    # E-1: re-load rows by id after the session release.
+    a = db.get(AttackAssessment, aid)
+    rows = {
+        r.technique_code: r
+        for r in db.execute(select(AttackCoverage).where(AttackCoverage.assessment_id == aid))
+        .scalars()
+        .all()
+    }
 
     def _validate_tools(names: object) -> list[str]:
         if not isinstance(names, list):
@@ -568,11 +648,11 @@ def run_ai(
             row.response_tools = _validate_tools(sugg["response_tools"])
         if isinstance(sugg.get("rationale"), str):
             row.rationale = sugg["rationale"]
-        row.answered_by = user.id
+        row.answered_by = user_id
         row.answered_at = utcnow()
 
     db.flush()
-    after = _snap()
+    after = _snap_rows(rows)
     diffs = diff_keyed_rows(before, after, _DIFF_FIELDS, locked_keys=locked_keys)
     changes = [
         CoverageChange(technique_code=d.key, field=ch.field, old=ch.old, new=ch.new)
@@ -580,13 +660,22 @@ def run_ai(
         for ch in d.changes
     ]
 
+    # E-4: persist the AI narrative output on the assessment so the GET echoes it.
+    exec_summary = data.get("executive_summary")
+    blind = data.get("top_blind_spots")
+    a.ai_summaries = {
+        "executive_summary": exec_summary if isinstance(exec_summary, str) else None,
+        "top_blind_spots": (
+            [b for b in blind if isinstance(b, str)] if isinstance(blind, list) else []
+        ),
+    }
     a.documents_stale = True  # Work Order C3
     audit(
         db,
         action="attack.run_ai",
         target_type="attack_assessment",
         target_id=a.id,
-        actor_user_id=user.id,
+        actor_user_id=user_id,
         details={
             "tools_available": len(tools),
             "changed_rows": len(diffs),
@@ -604,6 +693,7 @@ def run_ai(
         coverage=coverage,
         failed_batches=failed_batches,
         warnings=warnings,
+        mode=llm.mode,
     )
 
 

@@ -35,6 +35,7 @@ import type {
 } from "@/lib/attack/types";
 
 import { MessageThread } from "@/components/messages/MessageThread";
+import { SimulatedBadge } from "@/components/admin/SimulatedBadge";
 import { StaleDocsNudge } from "@/components/admin/StaleDocsNudge";
 
 import { AttackDeliverableCard } from "./AttackDeliverableCard";
@@ -364,6 +365,12 @@ export function AttackWorkspace({
                   {runResult.tools_available === 0
                     ? "No tools were available from the Tech Debt list, so only statuses were inferred."
                     : `${runResult.tools_available} tool${runResult.tools_available === 1 ? "" : "s"} available for mapping.`}
+                  {runResult.mode === "fixture" ? (
+                    <>
+                      {" "}
+                      <SimulatedBadge />
+                    </>
+                  ) : null}
                 </p>
               ) : null}
               {runResult && (runResult.failed_batches ?? 0) > 0 ? (

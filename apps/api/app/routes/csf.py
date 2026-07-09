@@ -23,13 +23,15 @@ import uuid
 from collections.abc import Iterable
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.ai.contracts import validate_response
 from app.ai.diff import diff_keyed_rows
 from app.ai.engine import run_job
-from app.ai.llm import LLMClient
+from app.ai.llm import LLMClient, has_preview_ack
 from app.audit import audit
 from app.csf import playbook_export as csf_playbook_export
 from app.csf.catalog import (
@@ -56,8 +58,9 @@ from app.csf.playbook import (
     weighted_floor_rollup,
 )
 from app.csf.scoring import compute as compute_score
-from app.db.session import get_db
+from app.db.session import assessment_advisory_lock, get_db
 from app.dependencies import current_client, current_user, require_role
+from app.middleware.ratelimit import rate_limit_user
 from app.models._common import utcnow
 from app.models.artifact import Artifact, ArtifactOrigin
 from app.models.client import Client
@@ -109,6 +112,7 @@ from app.tech_debt.filename import (
     deliverable_filename,
 )
 from app.tenant import (
+    require_artifact_in_tenant,
     require_csf_assessment_in_tenant,
     require_service_in_tenant,
 )
@@ -116,6 +120,8 @@ from app.tenant import (
 router = APIRouter(prefix="/csf", tags=["csf"])
 
 _admin_required = Depends(require_role(UserRole.ADMIN))
+# H-2: per-user token-bucket limiter on the AI run endpoint.
+_ai_rate_limited = Depends(rate_limit_user())
 
 
 # ---------------------------------------------------------------------------
@@ -353,9 +359,19 @@ def create_assessment(
     user: Annotated[User, _admin_required],
     client: Annotated[Client, Depends(current_client)],
     db: Annotated[Session, Depends(get_db)],
+    response: Response,
 ) -> CsfAssessmentResponse:
     svc = require_service_in_tenant(db, service_id, client.id, kind=ServiceKind.NIST_CSF)
     prior = _latest_assessment(db, svc.id)
+    # E-3 open-draft guard: an assessment still in a pre-approval working status
+    # (DRAFT or SUBMITTED) is returned as-is (200) rather than minting a new
+    # version, so a double-create can't orphan in-progress work.
+    if prior is not None and prior.status in (
+        CsfAssessmentStatus.DRAFT,
+        CsfAssessmentStatus.SUBMITTED,
+    ):
+        response.status_code = status.HTTP_200_OK
+        return _serialize_assessment(db, prior)
     version = (prior.version + 1) if prior else 1
     assessment = CsfAssessment(
         service_id=svc.id,
@@ -375,6 +391,9 @@ def create_assessment(
                 subcategory_code=sc.code,
             )
         )
+    # F-1: seed the Working Profile for the client's intake tier so the workspace
+    # (and run-ai) has scoreable rows from the start; re-sync via the seed endpoint.
+    _seed_dimension_rows(db, assessment.id, client.id, _default_seed_tiers(db, svc.id))
     audit(
         db,
         action="csf.assessment.created",
@@ -470,7 +489,10 @@ def patch_answer(
     if "notes" in data:
         row.notes = data["notes"]
     if "evidence_artifact_id" in data:
-        row.evidence_artifact_id = data["evidence_artifact_id"]
+        ev = data["evidence_artifact_id"]
+        if ev is not None:
+            require_artifact_in_tenant(db, ev, client.id)
+        row.evidence_artifact_id = ev
     if data.get("locked") is not None:
         row.locked = bool(data["locked"])
     row.answered_by = user.id
@@ -771,6 +793,50 @@ def gap_analysis(
 
 _VALID_TIERS = {t.value for t in Tier}
 
+# F-1: the client's intake impact profile maps to the Working-Profile tier that
+# run-ai / create-assessment auto-seed when no rows exist. HIGH is the fallback
+# (the most complete profile) when no intake profile has been chosen.
+_PROFILE_TO_SEED_TIER = {"LOW": "low", "MOD": "moderate", "HIGH": "high"}
+
+
+def _seed_dimension_rows(
+    db: Session, assessment_id: uuid.UUID, client_id: uuid.UUID, tiers: Iterable[str]
+) -> int:
+    """Idempotently seed CsfDimensionScore rows for the given tiers (F-1).
+
+    Shared by the seed endpoint, create-assessment, and run-ai auto-seed. Adds
+    rows to the session (caller flushes/commits); returns the count created.
+    """
+    existing = {
+        (r.tier, r.subcategory_code)
+        for r in db.execute(
+            select(CsfDimensionScore.tier, CsfDimensionScore.subcategory_code).where(
+                CsfDimensionScore.assessment_id == assessment_id
+            )
+        ).all()
+    }
+    created = 0
+    for tier in tiers:
+        for sc in SUBCATEGORIES:
+            if (tier, sc.code) in existing:
+                continue
+            db.add(
+                CsfDimensionScore(
+                    assessment_id=assessment_id,
+                    client_id=client_id,
+                    tier=tier,
+                    subcategory_code=sc.code,
+                )
+            )
+            created += 1
+    return created
+
+
+def _default_seed_tiers(db: Session, service_id: uuid.UUID) -> list[str]:
+    """The tier(s) auto-seeded for a service, from the client's intake profile."""
+    profile = (_client_profile(db, service_id) or "").upper()
+    return [_PROFILE_TO_SEED_TIER.get(profile, "high")]
+
 
 def _dims(row: CsfDimensionScore) -> DimensionScores:
     return DimensionScores(
@@ -829,28 +895,7 @@ def seed_profiles(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="No valid tiers (high/moderate/low).",
         )
-    existing = {
-        (r.tier, r.subcategory_code)
-        for r in db.execute(
-            select(CsfDimensionScore.tier, CsfDimensionScore.subcategory_code).where(
-                CsfDimensionScore.assessment_id == a.id
-            )
-        ).all()
-    }
-    created = 0
-    for tier in tiers:
-        for sc in SUBCATEGORIES:
-            if (tier, sc.code) in existing:
-                continue
-            db.add(
-                CsfDimensionScore(
-                    assessment_id=a.id,
-                    client_id=client.id,
-                    tier=tier,
-                    subcategory_code=sc.code,
-                )
-            )
-            created += 1
+    created = _seed_dimension_rows(db, a.id, client.id, tiers)
     audit(
         db,
         action="csf.profiles_seeded",
@@ -1027,6 +1072,7 @@ _RUN_FIELDS = (*_DIM_FIELDS, "what_we_found")
     "/services/{service_id}/run-ai",
     response_model=CsfRunAiResponse,
     summary="Run the csf_score AI job: suggest dimension scores + narrative (admin)",
+    dependencies=[_ai_rate_limited],
 )
 def run_ai(
     service_id: uuid.UUID,
@@ -1034,6 +1080,9 @@ def run_ai(
     client: Annotated[Client, Depends(current_client)],
     db: Annotated[Session, Depends(get_db)],
     llm: Annotated[LLMClient, Depends(_llm_dep)],
+    preview: Annotated[
+        bool, Query(description="Dry-run: return the redacted payload only")
+    ] = False,
 ) -> CsfRunAiResponse:
     """The CSF full-Playbook 'Run AI'. Suggests the five dimension scores (0-2)
     + a 'what we found' narrative per (tier, subcategory). AI suggests; locked
@@ -1050,6 +1099,22 @@ def run_ai(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="This assessment is locked."
         )
+    # H-6: a live (non-preview) run requires a recorded redaction-preview ack for
+    # this client. Fixture mode and preview runs are exempt.
+    if not preview and llm.mode == "live" and not has_preview_ack(db, client.id):
+        raise HTTPException(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            detail="Redaction preview acknowledgment required for this client before live AI runs",
+        )
+    # E-3: serialize concurrent runs for this assessment (409 loser on Postgres).
+    if not preview:
+        assessment_advisory_lock(db, a.id)
+    aid = a.id
+    svc_id = svc.id
+    client_id = client.id
+    # Capture the actor id as a plain value: an auto-seed commit below expires
+    # the dependency-loaded `user`, and the E-1 db.close() detaches it.
+    user_id = user.id
     rows = {
         f"{r.tier}|{r.subcategory_code}": r
         for r in db.execute(
@@ -1059,16 +1124,27 @@ def run_ai(
         .all()
     }
     if not rows:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Seed the Working Profile before running AI.",
-        )
+        # F-1: auto-seed the Working Profile for the client's intake tier rather
+        # than 409-ing. The seed endpoint remains for re-sync. Commit before the
+        # E-1 db.close() below (which discards uncommitted work); a preview run
+        # never commits, so its transient seed is discarded on close.
+        _seed_dimension_rows(db, a.id, client.id, _default_seed_tiers(db, svc.id))
+        db.flush()
+        if not preview:
+            db.commit()
+        rows = {
+            f"{r.tier}|{r.subcategory_code}": r
+            for r in db.execute(
+                select(CsfDimensionScore).where(CsfDimensionScore.assessment_id == a.id)
+            )
+            .scalars()
+            .all()
+        }
     locked_keys = frozenset(k for k, r in rows.items() if r.locked)
 
-    def _snap() -> dict[str, dict]:
-        return {k: {f: getattr(r, f) for f in _RUN_FIELDS} for k, r in rows.items()}
-
-    before = _snap()
+    # E-1: snapshot to plain data BEFORE the call so we can diff after the request
+    # session is released and the ORM rows are re-loaded.
+    before = {k: {f: getattr(r, f) for f in _RUN_FIELDS} for k, r in rows.items()}
     client_org = None if client.legal_name == "(pending intake)" else client.legal_name
     # Ground the suggestion in the seeded tier list plus, per (tier, subcategory)
     # row, the client's questionnaire answer (maturity tier + notes) and evidence
@@ -1093,19 +1169,48 @@ def run_ai(
                 "questionnaire_notes": ans.notes if ans is not None else None,
             }
         )
+    inputs = {
+        "tiers": sorted({r.tier for r in rows.values()}),
+        "subcategories": subcategory_payload,
+    }
+
+    # H-6: preview short-circuits before any provider call or llm_calls row.
+    if preview:
+        prev = llm.preview(purpose="csf_score", inputs=inputs, client_org_name=client_org)
+        return JSONResponse({"preview": True, **prev})
+
+    # E-1: release the request DB connection to the pool for the duration of the
+    # (potentially long) provider call. The llm_calls audit row is written on an
+    # independent session inside LLMClient.invoke, so nothing here needs the
+    # connection while the model runs. close() expunges the ORM objects above, so
+    # we re-load the rows afterward by id.
+    db.close()
     result = run_job(
         db,
         llm,
         "csf_score",
-        inputs={
-            "tiers": sorted({r.tier for r in rows.values()}),
-            "subcategories": subcategory_payload,
-        },
-        requested_by=user.id,
-        service_id=svc.id,
+        inputs=inputs,
+        requested_by=user_id,
+        service_id=svc_id,
+        client_id=client_id,
         client_org_name=client_org,
     )
+    # A-6: reject a wrong-shape response before the apply loop (nothing written).
+    problems = validate_response("csf_score", result.data)
+    if problems:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="AI response failed validation: " + "; ".join(problems),
+        )
     data = result.data if isinstance(result.data, dict) else {}
+
+    a = db.get(CsfAssessment, aid)
+    rows = {
+        f"{r.tier}|{r.subcategory_code}": r
+        for r in db.execute(select(CsfDimensionScore).where(CsfDimensionScore.assessment_id == aid))
+        .scalars()
+        .all()
+    }
 
     for sugg in data.get("scores", []):
         if not isinstance(sugg, dict):
@@ -1126,7 +1231,7 @@ def run_ai(
         row.scored_at = utcnow()  # B-3: AI apply counts as scoring this row
 
     db.flush()
-    after = _snap()
+    after = {k: {f: getattr(r, f) for f in _RUN_FIELDS} for k, r in rows.items()}
     diffs = diff_keyed_rows(before, after, list(_RUN_FIELDS), locked_keys=locked_keys)
     changes: list[CsfDimensionChange] = []
     for d in diffs:
@@ -1144,7 +1249,7 @@ def run_ai(
         action="csf.run_ai",
         target_type="csf_assessment",
         target_id=a.id,
-        actor_user_id=user.id,
+        actor_user_id=user_id,
         details={"changed_rows": len(diffs)},
     )
     db.commit()
@@ -1152,7 +1257,7 @@ def run_ai(
         _score_response(r)
         for r in sorted(rows.values(), key=lambda r: (r.tier, r.subcategory_code))
     ]
-    return CsfRunAiResponse(changed=changes, rows=out_rows)
+    return CsfRunAiResponse(changed=changes, rows=out_rows, mode=llm.mode)
 
 
 @router.post(

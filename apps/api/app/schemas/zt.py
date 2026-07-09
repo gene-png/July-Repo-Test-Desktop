@@ -96,6 +96,8 @@ class ZtAssessmentResponse(BaseModel):
     answers: list[ZtAnswerResponse]
     # Target stage the client picked at intake (2-4), or null if not set.
     client_target_stage: int | None = None
+    # E-4: persisted zt_score AI narrative output (pillar narratives + summaries).
+    narratives: dict | None = None
 
 
 class ZtAnswerPatch(BaseModel):
@@ -166,6 +168,8 @@ class ZtRunAiResponse(BaseModel):
     pillar_narratives: dict[str, str] = {}
     executive_summary: str | None = None
     roadmap_summary: str | None = None
+    # E-5: "fixture" (simulated) or "live" so the UI can badge simulated output.
+    mode: str = "fixture"
 
 
 class ZtInterviewQuestion(BaseModel):

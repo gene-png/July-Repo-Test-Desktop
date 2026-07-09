@@ -13,17 +13,20 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.ai.contracts import validate_response
 from app.ai.engine import run_job
-from app.ai.llm import LLMClient
+from app.ai.llm import LLMClient, has_preview_ack
 from app.attack.catalog import all_codes as attack_all_codes
 from app.audit import audit
-from app.db.session import get_db
+from app.db.session import assessment_advisory_lock, get_db
 from app.dependencies import require_role
 from app.docx_export import DOCX_MIME
+from app.middleware.ratelimit import rate_limit_user
 from app.models._common import utcnow
 from app.models.artifact import Artifact, ArtifactOrigin
 from app.models.attack_assessment import AttackAssessment, AttackCoverage
@@ -54,6 +57,8 @@ from app.storage import StorageBackend
 router = APIRouter(prefix="/risk", tags=["risk-register"])
 
 _admin_required = Depends(require_role(UserRole.ADMIN))
+# H-2: per-user token-bucket limiter on the AI generate endpoint.
+_ai_rate_limited = Depends(rate_limit_user())
 
 
 def _llm_dep() -> LLMClient:
@@ -191,12 +196,16 @@ def _enum_or_none(enum_cls, value):
     response_model=RiskRegisterResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Generate a new Risk Register version (admin)",
+    dependencies=[_ai_rate_limited],
 )
 def generate(
     cid: uuid.UUID,
     admin: Annotated[User, _admin_required],
     db: Annotated[Session, Depends(get_db)],
     llm: Annotated[LLMClient, Depends(_llm_dep)],
+    preview: Annotated[
+        bool, Query(description="Dry-run: return the redacted payload only")
+    ] = False,
 ) -> RiskRegisterResponse:
     client = _require_client(db, cid)
     g = _gate(db, cid)
@@ -205,21 +214,51 @@ def generate(
             status_code=status.HTTP_409_CONFLICT,
             detail="Risk Register is locked. Missing: " + "; ".join(g.missing) + ".",
         )
+    # H-6: a live (non-preview) run requires a recorded redaction-preview ack.
+    if not preview and llm.mode == "live" and not has_preview_ack(db, cid):
+        raise HTTPException(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            detail="Redaction preview acknowledgment required for this client before live AI runs",
+        )
+    # E-3: serialize concurrent Risk Register generations for this client (409
+    # loser on Postgres). Keyed on the client id since the register is
+    # client-scoped, not assessment-scoped.
+    if not preview:
+        assessment_advisory_lock(db, cid)
 
     findings, valid_techniques, valid_controls = _gather_findings(db, cid)
     client_org = None if client.legal_name == "(pending intake)" else client.legal_name
+    inputs = {
+        "findings": findings,
+        "valid_techniques": sorted(valid_techniques),
+        "valid_controls": sorted(valid_controls),
+    }
+
+    # H-6: preview short-circuits before any provider call or llm_calls row.
+    if preview:
+        prev = llm.preview(purpose="risk_synthesize", inputs=inputs, client_org_name=client_org)
+        return JSONResponse({"preview": True, **prev})
+
+    # E-1: findings are already plain data; release the request connection during
+    # the provider call and re-query afterward (the apply phase below reconnects
+    # lazily).
+    db.close()
     result = run_job(
         db,
         llm,
         "risk_synthesize",
-        inputs={
-            "findings": findings,
-            "valid_techniques": sorted(valid_techniques),
-            "valid_controls": sorted(valid_controls),
-        },
+        inputs=inputs,
         requested_by=admin.id,
+        client_id=cid,
         client_org_name=client_org,
     )
+    # A-6: reject a wrong-shape response before any register row is written.
+    problems = validate_response("risk_synthesize", result.data)
+    if problems:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="AI response failed validation: " + "; ".join(problems),
+        )
     data = result.data if isinstance(result.data, dict) else {}
 
     # New version; supersede the prior current one.
@@ -280,6 +319,7 @@ def generate(
     )
     db.commit()
     resp = _serialize(db, register)
+    resp.mode = llm.mode
     if unrecognized:
         resp.warnings = [f"{unrecognized} entries had unrecognized likelihood/impact"]
     return resp

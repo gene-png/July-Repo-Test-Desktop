@@ -54,6 +54,8 @@ export interface CapabilityList {
   items: CapabilityItem[];
   approved_at: string | null;
   approved_by: string | null;
+  /** "fixture" when the extraction came from deterministic demo fixtures. */
+  mode?: "fixture" | "live";
 }
 
 export interface CapabilityItemPatch {

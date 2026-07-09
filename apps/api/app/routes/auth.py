@@ -30,6 +30,7 @@ from app.audit import audit
 from app.config import get_settings
 from app.db.session import get_db
 from app.dependencies import current_user
+from app.middleware.ratelimit import rate_limit_ip
 from app.models._common import utcnow
 from app.models.client import Client
 from app.models.client_domain import ClientDomain
@@ -51,6 +52,9 @@ from app.security.password import (
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# H-2: per-IP token-bucket limiter on the credential endpoints.
+_ip_rate_limited = Depends(rate_limit_ip())
 
 # Precomputed Argon2 hash for the unknown-user code path. Keeps wrong-email
 # response time comparable to wrong-password response time so an attacker
@@ -140,6 +144,7 @@ def _register_successful_login(db: Session, user: User) -> None:
     response_model=RegisterResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Self-register (D-004)",
+    dependencies=[_ip_rate_limited],
 )
 def register(
     body: RegisterRequest,
@@ -261,6 +266,7 @@ def register(
     "/login",
     response_model=TokenPairResponse,
     summary="Email + password login",
+    dependencies=[_ip_rate_limited],
 )
 def login(
     body: LoginRequest,
@@ -318,6 +324,7 @@ def login(
     "/refresh",
     response_model=TokenPairResponse,
     summary="Refresh access + refresh tokens",
+    dependencies=[_ip_rate_limited],
 )
 def refresh(
     body: RefreshRequest,

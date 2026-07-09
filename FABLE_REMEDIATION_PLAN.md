@@ -296,7 +296,32 @@ Remaining issues carried forward: none within Sprint 1 scope. Live-mode smoke ag
 
 ### Sprint 2 evidence
 
-(pending)
+Four Opus implementation subagents (S2-A runtime, S2-B extraction, S2-C contracts/persistence, S2-D frontend) plus a Playwright QA subagent; every diff lead-reviewed. The QA subagent was interrupted by an account spend limit mid-run; the lead completed its diagnosis, fixed the two real bugs it surfaced, repaired its spec locators, and reran the suite to green.
+
+- E-1 (S2-A): whole-call LLM deadline (300s default, config) via a worker thread; timeout maps to a typed 504 "the AI call timed out; nothing was changed" with the llm_calls row marked FAILED; run-ai routes release the request DB connection during the provider call (db.close() then re-fetch by id), proven by a single-connection-pool concurrency test. Known limitation recorded: with the connection released, the Postgres advisory lock gates entry rather than spanning the whole run.
+- E-2 (S2-A): llm_calls rows written on an independent session, RUNNING committed before the call, COMPLETED/FAILED after; the self-masking unit test now reads from a fresh session.
+- E-3 (S2-A): advisory-lock helper (pg_try_advisory_xact_lock on Postgres, no-op on SQLite) on every run-ai and risk generate returning 409 to the loser; unique constraint on risk_registers (client_id, version) (migration 0030); open-draft guard on all three create-assessment routes. Honest coverage note: real two-transaction contention is not exercisable on the SQLite suite; helper SQL and 409 mapping are unit-tested.
+- E-4 (S2-C): zt_assessments.narratives and attack_assessments.ai_summaries (migrations 0031, 0032) persisted on run-ai and returned by GET.
+- E-5 (S2-C backend, S2-D frontend): truthful banner copy both sides; run-ai responses carry mode; "simulated" pill rendered in the four workspaces. The pill's e2e spec is a documented fixme (QA agent interrupted); banner copy and mode field are e2e-verified, the pill itself is unit-visible only until Sprint 3 QA.
+- G-3 (S2-A): assert_safe_for_runtime refuses production+fixture unless SHIELD_DEMO=1; guard matrix unit-tested.
+- H-2 (S2-A): token-bucket rate limiting, per-IP 10/min on the three auth endpoints and per-user 6/min on run-ai/generate/extract; Redis-backed with in-memory fallback; 429 plus Retry-After; limits in config, disabled in the test suite except dedicated tests.
+- C-3 (S2-B): all worksheets parsed with best-candidate selection; duplicate headers uniquified; overflow cells kept; parse_report (sheet_used, rows_parsed, rows_skipped, truncated) returned by extraction.
+- C-4 (S2-B): conservative money/count parser ($ and thousands separators stripped, trailing words tolerated, multipliers refused to notes); confidence clamped 0-100 at extraction and PATCH.
+- C-5 (S2-B): wrong-shape and empty-for-nonempty LLM responses raise to typed 502 with no CapabilityList minted.
+- C-6 (S2-B): magic-byte sniffing (zip family, PDF, OLE2 rejected, PNG/JPEG, UTF-8 text heuristic); Content-Length pre-check plus streamed reads with an incremental cap in the API and the Next proxy.
+- C-7 (S2-B): extraction fetches bytes through storage.get() with boto connect/read timeouts and bounded retries; StorageUnavailableError maps to 503, missing key to 410.
+- C-8 (S2-B): evidence PATCHes on all three services go through require_artifact_in_tenant; sha256 upload dedup returns the existing artifact (200, already_uploaded). Lead fix after QA: the dedup lookup uses first() on newest rather than scalar_one_or_none, which 500ed for tenants holding pre-dedup duplicate rows (found live by QA).
+- A-6 (S2-C): validate_response structural checks wired into every run-ai/generate route (502 with joined problems); env-gated live smoke test module (5 tests, skipped without SHIELD_LIVE_SMOKE=1 plus a key).
+- F-1/F-2 (S2-C): CSF auto-seeds at create and run-ai (409 removed); ZT/ATT&CK run-ai auto-create a seeded draft (using the open-draft guard).
+- H-5 (S2-C): llm_calls.client_id (migration 0033) populated everywhere; GET /admin/ai-usage per-client per-month with cost estimates and CSV.
+- H-6 (S2-C): run-ai?preview=1 returns the redacted payload plus redaction summary with no provider call and no llm_calls row; live runs require a recorded per-client preview acknowledgment (428 otherwise); fixture mode exempt.
+- D-1 (S2-D): every assessment card links at every status; self-assessment renders read-only post-submit; new client detail page /client-services/[serviceId] for tech_debt and attack; /messages is a real inbox with unread counts.
+- D-2 (S2-D plus lead fix): ClientSwitcher mounted in AdminShell; inline switcher in the Risk Register and Inbox empty states. QA found the inline picker did not unstick the page (client components read the tenant only on mount; router.refresh() does not rerun them); lead added an onChanged callback to ClientSwitcher and reload keys to both views. e2e-verified.
+- D-3 (S2-D plus lead fix): ProxyError surfaces the API's typed message; QA found the Finish-intake link never rendered because isIncompleteIntakeError read payload.detail while the API envelope is error.message; lead fixed the helper to accept both. e2e-verified including the link.
+
+Gate results: 592 unit tests, 0 failures, 5 gated live-smoke skips (junit-verified); ruff, black, bandit, prettier, eslint, tsc clean; Next production build green. Playwright 11 passed, 0 failed, 1 documented fixme, across smoke, Sprint 1 and Sprint 2 specs against the freshly migrated (0029-0033) local stack. Migrations up/down verified where tested.
+
+Session note: partway through Sprint 2 QA the account hit its monthly API spend limit (the QA agent died mid-diagnosis) and the sandbox container restarted (stack and Docker state rebuilt by the lead). All remaining Sprint 2 work above was completed by the lead in the main session.
 
 ### Sprint 3 evidence
 

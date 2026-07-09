@@ -18,6 +18,7 @@ llm_calls row records the version that ran.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -31,7 +32,7 @@ from app.models.client import Client
 from app.models.llm_call import LLMCall
 from app.models.user import User
 from app.storage import StorageBackend
-from app.tech_debt.parsers import EmptyInventoryError, parse_inventory
+from app.tech_debt.parsers import EmptyInventoryError, ParseReport, parse_inventory
 
 PROMPT_VERSION = "v1"
 
@@ -87,39 +88,89 @@ class ExtractionResult:
     # was dropped before the model saw it. Surfaced in the extract response
     # so the admin knows the list may be incomplete.
     truncated: bool = False
-
-
-def _split_truncation_sentinel(
-    rows: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], bool]:
-    """Peel the parsers.parse_inventory truncation sentinel off the tail.
-
-    parse_inventory appends a ``{"__truncated__": True, ...}`` marker row when
-    the input exceeded MAX_ROWS. That marker is a signal for us, not a data row
-    to hand the model, so we strip it here and return the truncated flag.
-    """
-    if rows and isinstance(rows[-1], dict) and rows[-1].get("__truncated__") is True:
-        return rows[:-1], True
-    return rows, False
+    # Structured parse metadata (C-3): sheet used, rows parsed/skipped,
+    # truncation. None only on the legacy direct-construction path.
+    parse_report: ParseReport | None = None
 
 
 def _load_artifact_bytes(storage: StorageBackend, artifact: Artifact) -> bytes:
-    """LocalFilesystemStorage exposes file paths; production S3 needs a
-    `get_object` call. For v1, only the local backend is hit synchronously
-    here - the S3 path is reached at deliverable-render time."""
-    if hasattr(storage, "_path_for"):
-        return storage._path_for(artifact.file_storage_key).read_bytes()  # type: ignore[attr-defined]
-    # Fall back to the signed URL + a plain GET when the backend doesn't
-    # expose a local path. (Tests always hit LocalFilesystemStorage so this
-    # branch is exercised only when wired to S3 in Phase 6.)
-    import urllib.request
+    """Read the raw artifact bytes through the storage backend (C-7).
 
-    url = storage.signed_url(artifact.file_storage_key, ttl_seconds=120)
-    with urllib.request.urlopen(url) as resp:  # noqa: S310 - URL produced by our own StorageBackend
-        return resp.read()
+    Every backend implements ``get(key)`` (local reads the file, S3 does a
+    ``get_object``). Missing objects raise FileNotFoundError and a storage
+    outage raises StorageUnavailableError; the route maps those to 410 / 503.
+    """
+    return storage.get(artifact.file_storage_key)
 
 
-def _parse_response(content: str) -> list[ExtractedCapability]:
+# Leading currency symbol / whitespace, then a plain number (optional thousands
+# commas + optional decimal). Trailing text after the number is captured so we
+# can distinguish a trailing word (allowed: "500 seats") from an attached
+# multiplier/unit (rejected: "1.2M", "50%").
+_LEADING_NUMBER_RE = re.compile(r"\$?\s*(\d[\d,]*(?:\.\d+)?)(.*)$", re.DOTALL)
+
+
+def _leading_number(raw: Any) -> float | None:
+    """Conservatively parse a leading plain number from ``raw``.
+
+    Returns None when nothing plausible parses. We deliberately do NOT guess
+    multipliers ("120k", "1.2M") or currencies ("EUR 120") - those come back
+    None so the raw string can be preserved in notes for human review.
+    """
+    if raw is None or isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    s = str(raw).strip()
+    if not s:
+        return None
+    m = _LEADING_NUMBER_RE.match(s)
+    if m is None:
+        return None
+    num_str, rest = m.group(1), m.group(2)
+    # A trailing word (space-separated) is fine; an attached unit/multiplier is
+    # ambiguous, so bail rather than guess.
+    if rest and not rest[0].isspace():
+        return None
+    try:
+        return float(num_str.replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _money_field(raw: Any) -> tuple[float | None, str | None]:
+    """Parse an annual-cost value; return (value, note-or-None).
+
+    Unparseable non-empty raw strings return None plus a "cost: '<raw>'" note
+    so nothing is silently dropped.
+    """
+    val = _leading_number(raw)
+    if val is not None:
+        return val, None
+    if raw is None:
+        return None, None
+    s = str(raw).strip()
+    if not s:
+        return None, None
+    return None, f"cost: '{s}'"
+
+
+def _count_field(raw: Any) -> tuple[int | None, str | None]:
+    """Parse a license-count value; return (value, note-or-None)."""
+    val = _leading_number(raw)
+    if val is not None:
+        return int(val), None
+    if raw is None:
+        return None, None
+    s = str(raw).strip()
+    if not s:
+        return None, None
+    return None, f"licenses: '{s}'"
+
+
+def _parse_response(
+    content: str, *, input_row_count: int | None = None
+) -> list[ExtractedCapability]:
     try:
         decoded = json.loads(content)
     except json.JSONDecodeError as exc:
@@ -131,8 +182,25 @@ def _parse_response(content: str) -> list[ExtractedCapability]:
             raise ValueError(f"LLM response was not parseable JSON: {exc}") from exc
         decoded = json.loads(content[first : last + 1])
 
-    raw_items = decoded.get("items", []) if isinstance(decoded, dict) else []
-    return [_coerce_item(item) for item in raw_items if isinstance(item, dict)]
+    # C-5: the response must be the documented {"items": [...]} object. A
+    # list-shaped or wrong-key response is an upstream contract violation, not
+    # an empty result - raise so the route can surface a 502.
+    if not isinstance(decoded, dict) or "items" not in decoded:
+        got = sorted(decoded) if isinstance(decoded, dict) else type(decoded).__name__
+        raise ValueError(
+            f"AI response was not the expected {{'items': [...]}} object (got keys: {got})"
+        )
+    raw_items = decoded["items"]
+    if not isinstance(raw_items, list):
+        raise ValueError("AI response 'items' was not a list.")
+
+    items = [_coerce_item(item) for item in raw_items if isinstance(item, dict)]
+    if input_row_count and not items:
+        raise ValueError(
+            "AI returned no capabilities for a non-empty inventory "
+            f"({input_row_count} rows submitted)."
+        )
+    return items
 
 
 def _coerce_item(item: dict[str, Any]) -> ExtractedCapability:
@@ -152,25 +220,77 @@ def _coerce_item(item: dict[str, Any]) -> ExtractedCapability:
         except (TypeError, ValueError):
             return None
 
-    def _opt_float(key: str) -> float | None:
-        v = item.get(key)
-        if v is None or v == "":
-            return None
-        try:
-            return float(v)
-        except (TypeError, ValueError):
-            return None
+    # Tolerant numeric parsing (C-4): unparseable cost/license values are
+    # preserved in notes rather than dropped.
+    note_parts: list[str] = []
+    base_note = _opt_str("notes")
+    if base_note:
+        note_parts.append(base_note)
+    cost, cost_note = _money_field(item.get("annual_cost_usd"))
+    if cost_note:
+        note_parts.append(cost_note)
+    licenses, license_note = _count_field(item.get("license_count"))
+    if license_note:
+        note_parts.append(license_note)
+    notes = "; ".join(note_parts) or None
+
+    # Clamp confidence to the documented 0-100 range at extraction (C-4).
+    confidence = _opt_int("confidence_pct")
+    if confidence is not None:
+        confidence = max(0, min(100, confidence))
 
     return ExtractedCapability(
         name=(_opt_str("name") or "Unknown capability"),
         vendor=_opt_str("vendor"),
         category=_opt_str("category"),
         function=_opt_str("function"),
-        annual_cost_usd=_opt_float("annual_cost_usd"),
-        license_count=_opt_int("license_count"),
-        notes=_opt_str("notes"),
-        confidence_pct=_opt_int("confidence_pct"),
+        annual_cost_usd=cost,
+        license_count=licenses,
+        notes=notes,
+        confidence_pct=confidence,
         source_row_index=_opt_int("source_row_index"),
+    )
+
+
+def _build_extract_payload(
+    storage: StorageBackend, artifact: Artifact
+) -> tuple[dict[str, Any], list, Any]:
+    """Load + parse the inventory into the AI job payload (shared by the live
+    extract and the H-6 redaction preview). Raises EmptyInventoryError for a
+    header-only/empty file."""
+    raw = _load_artifact_bytes(storage, artifact)
+    rows, report = parse_inventory(raw, artifact.mime_type)
+    if not rows:
+        raise EmptyInventoryError(
+            "No data rows found in this file; check that the inventory has a "
+            "header row above the data"
+        )
+    payload: dict[str, Any] = {
+        "rows": rows,
+        "context": {
+            "source_filename": artifact.title,
+            "source_mime": artifact.mime_type,
+        },
+    }
+    return payload, rows, report
+
+
+def preview_extraction(
+    *,
+    storage: StorageBackend,
+    artifact: Artifact,
+    client_org_name: str | None,
+    name_hints: Iterable[str] = (),
+    llm: LLMClient,
+) -> dict[str, Any]:
+    """H-6: build the extract payload and return the redaction preview WITHOUT
+    calling the provider or writing an llm_calls row."""
+    payload, _rows, _report = _build_extract_payload(storage, artifact)
+    return llm.preview(
+        purpose="extract.capabilities",
+        inputs=payload,
+        client_org_name=client_org_name,
+        name_hints=tuple(name_hints),
     )
 
 
@@ -181,26 +301,13 @@ def extract_capabilities(
     artifact: Artifact,
     requested_by: User,
     service_id: uuid.UUID,
+    client_id: uuid.UUID | None = None,
     client_org_name: str | None,
     name_hints: Iterable[str] = (),
     llm: LLMClient,
 ) -> ExtractionResult:
     """Top-level entry point used by the ingest route."""
-    raw = _load_artifact_bytes(storage, artifact)
-    rows, truncated = _split_truncation_sentinel(parse_inventory(raw, artifact.mime_type))
-    if not rows:
-        raise EmptyInventoryError(
-            "No data rows found in this file; check that the inventory is on "
-            "the first sheet with a header row"
-        )
-
-    payload: dict[str, Any] = {
-        "rows": rows,
-        "context": {
-            "source_filename": artifact.title,
-            "source_mime": artifact.mime_type,
-        },
-    }
+    payload, rows, report = _build_extract_payload(storage, artifact)
 
     # Runs through the AI job registry (Work Order C1); the "tech_debt_extract"
     # job keeps the historical "extract.capabilities" llm purpose.
@@ -213,10 +320,24 @@ def extract_capabilities(
         inputs=payload,
         requested_by=requested_by.id,
         service_id=service_id,
+        client_id=client_id,
         client_org_name=client_org_name,
         name_hints=tuple(name_hints),
     )
-    return ExtractionResult(items=result.data, llm_call=result.llm_call, truncated=truncated)
+    # C-5: the registry parser validated the response shape; here we know the
+    # input row count, so we can reject an empty result for a non-empty input
+    # (a ValueError the route maps to 502, before any CapabilityList is minted).
+    if not result.data:
+        raise ValueError(
+            "AI returned no capabilities for a non-empty inventory "
+            f"({len(rows)} rows submitted)."
+        )
+    return ExtractionResult(
+        items=result.data,
+        llm_call=result.llm_call,
+        truncated=report.truncated,
+        parse_report=report,
+    )
 
 
 def name_hints_for_tenant(db: Session, client_id) -> list[str]:

@@ -36,6 +36,7 @@ import type {
 } from "@/lib/zt/types";
 
 import { MessageThread } from "@/components/messages/MessageThread";
+import { SimulatedBadge } from "@/components/admin/SimulatedBadge";
 import { StaleDocsNudge } from "@/components/admin/StaleDocsNudge";
 
 import { ZtDeliverableCard } from "./ZtDeliverableCard";
@@ -387,7 +388,7 @@ export function ZtWorkspace({
                     .size === 1
                     ? "y"
                     : "ies"}
-                  .
+                  . {runResult.mode === "fixture" ? <SimulatedBadge /> : null}
                 </p>
               ) : null}
             </CardBody>

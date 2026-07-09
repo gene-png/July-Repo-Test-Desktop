@@ -20,6 +20,8 @@ import {
   seedProfiles,
 } from "@/lib/csf/client";
 
+import { SimulatedBadge } from "@/components/admin/SimulatedBadge";
+
 import { CsfDimensionEditor } from "./CsfDimensionEditor";
 import type {
   CsfPlaybookExport,
@@ -276,7 +278,7 @@ export function CsfPlaybookPanel({
                 .size === 1
                 ? "y"
                 : "ies"}
-              .
+              . {runResult.mode === "fixture" ? <SimulatedBadge /> : null}
             </p>
           ) : null}
 

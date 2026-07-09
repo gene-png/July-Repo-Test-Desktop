@@ -45,6 +45,11 @@ class LLMCall(UUIDPKMixin, TimestampMixin, Base):
     service_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("services.id", ondelete="SET NULL")
     )
+    # H-5: the tenant this call is billed to. Denormalized (no FK) so a call row
+    # survives a client purge for retained-usage accounting. Indexed for the
+    # per-client ai-usage aggregation. Uses SQLAlchemy's default Uuid type (as
+    # every other UUID column here does) so it round-trips uuid.UUID on SQLite.
+    client_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, index=True)
     purpose: Mapped[str] = mapped_column(String(64), nullable=False)
     prompt_version: Mapped[str] = mapped_column(String(32), nullable=False)
     provider: Mapped[str] = mapped_column(String(32), nullable=False)

@@ -179,7 +179,25 @@ export function CsfSelfAssessment({
     );
   }
   if (submitted) {
-    return <SelfAssessmentSubmitted />;
+    // Post-submit: confirm, then show the answers read-only (inputs disabled).
+    return (
+      <div className="flex flex-col gap-6">
+        <SelfAssessmentSubmitted />
+        <Card>
+          <CardHeader>
+            <CardTitle>Your submitted answers</CardTitle>
+          </CardHeader>
+          <CardBody>
+            <CsfQuestionnaire
+              catalog={filteredCatalog}
+              answersByCode={answersByCode}
+              readOnly
+              onAnswerUpdate={() => {}}
+            />
+          </CardBody>
+        </Card>
+      </div>
+    );
   }
 
   // Coverage is over the in-scope (profile-filtered) subcategories only.

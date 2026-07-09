@@ -39,6 +39,7 @@ import { DispositionLegend } from "./DispositionLegend";
 import { EditableCapabilityTable } from "./EditableCapabilityTable";
 import { IntakeDocumentsPanel } from "./IntakeDocumentsPanel";
 import { OverlapDashboard } from "./OverlapDashboard";
+import { SimulatedBadge } from "./SimulatedBadge";
 
 export interface TechDebtWorkspaceProps {
   serviceId: string;
@@ -296,6 +297,7 @@ export function TechDebtWorkspace({
             </h2>
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <StatusPill tone="info">{list.items.length} items</StatusPill>
+              {list.mode === "fixture" ? <SimulatedBadge /> : null}
               <StatusPill tone={lowConfidence === 0 ? "success" : "warning"}>
                 {lowConfidence === 0
                   ? "All rows ≥ 70% confident"

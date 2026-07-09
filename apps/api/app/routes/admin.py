@@ -14,12 +14,17 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ai.engine import get_job, registered_jobs
-from app.ai.llm import LLMClient, LLMConfigurationError, anthropic_sdk_available
+from app.ai.llm import (
+    AI_PREVIEW_ACK_ACTION,
+    LLMClient,
+    LLMConfigurationError,
+    anthropic_sdk_available,
+)
 from app.audit import audit
 from app.config import get_settings
 from app.db.session import get_db
@@ -28,6 +33,7 @@ from app.models._common import utcnow
 from app.models.artifact import Artifact
 from app.models.client import Client
 from app.models.client_domain import ClientDomain
+from app.models.llm_call import LLMCall
 from app.models.service import Service, ServiceKind, ServiceStatus
 from app.models.service_request import ServiceRequest, ServiceType
 from app.models.user import User, UserRole
@@ -50,6 +56,10 @@ from app.schemas.admin import (
     AdminUserListResponse,
     AdminUserSummary,
     AiJobOverride,
+    AiPreviewAckRequest,
+    AiPreviewAckResponse,
+    AiUsageResponse,
+    AiUsageRow,
     FulfillServiceRequestResponse,
 )
 from app.schemas.intake import ClientProfileResponse
@@ -676,8 +686,8 @@ def ai_status(_admin: Annotated[User, _admin_required]) -> AdminAiStatus:
             model=model,
             ready=False,
             detail=(
-                "Running in fixture mode — AI features are disabled. Set "
-                "SHIELD_LLM_MODE=live and ANTHROPIC_API_KEY to enable."
+                "AI suggestions are simulated (deterministic fixtures) for demo "
+                "and testing; set SHIELD_LLM_MODE=live for real analysis."
             ),
             sdk_importable=sdk_importable,
             key_present=key_present,
@@ -704,3 +714,131 @@ def ai_status(_admin: Annotated[User, _admin_required]) -> AdminAiStatus:
         key_present=key_present,
         per_job_overrides=overrides,
     )
+
+
+def _estimated_cost(
+    price_table: dict[str, dict[str, float]],
+    per_model: dict[str, tuple[int, int]],
+) -> float | None:
+    """Sum estimated USD cost across a bucket's models. Returns None when any
+    model in the bucket is absent from the price table (can't estimate)."""
+    total = 0.0
+    for model_name, (in_tok, out_tok) in per_model.items():
+        price = price_table.get(model_name)
+        if price is None:
+            return None
+        total += (in_tok / 1_000_000) * price.get("in", 0.0)
+        total += (out_tok / 1_000_000) * price.get("out", 0.0)
+    return round(total, 6)
+
+
+@router.get(
+    "/ai-usage",
+    response_model=AiUsageResponse,
+    summary="Per-client per-month AI usage + estimated cost (admin)",
+)
+def ai_usage(
+    _admin: Annotated[User, _admin_required],
+    db: Annotated[Session, Depends(get_db)],
+    format: Annotated[str | None, Query(description="'csv' for a text/csv download")] = None,
+) -> AiUsageResponse | Response:
+    """Aggregate llm_calls into (client, month) buckets: call count, summed
+    input/output tokens, and an estimated USD cost from the configured price
+    table (H-5). ?format=csv returns the same rows as a CSV download."""
+    settings = get_settings()
+    price_table = settings.shield_llm_price_table
+
+    rows = db.execute(
+        select(
+            LLMCall.client_id,
+            LLMCall.requested_at,
+            LLMCall.model,
+            LLMCall.input_tokens,
+            LLMCall.output_tokens,
+        )
+    ).all()
+
+    # bucket key -> aggregate; track per-model token totals for costing.
+    buckets: dict[tuple[str | None, str], dict] = {}
+    for client_id, requested_at, model_name, in_tok, out_tok in rows:
+        month = requested_at.strftime("%Y-%m") if requested_at is not None else "unknown"
+        cid = str(client_id) if client_id is not None else None
+        key = (cid, month)
+        b = buckets.setdefault(key, {"calls": 0, "input": 0, "output": 0, "per_model": {}})
+        b["calls"] += 1
+        i = int(in_tok or 0)
+        o = int(out_tok or 0)
+        b["input"] += i
+        b["output"] += o
+        pm = b["per_model"].setdefault(model_name, [0, 0])
+        pm[0] += i
+        pm[1] += o
+
+    out_rows: list[AiUsageRow] = []
+    for (cid, month), b in sorted(buckets.items(), key=lambda kv: (kv[0][1], kv[0][0] or "")):
+        per_model = {m: (v[0], v[1]) for m, v in b["per_model"].items()}
+        out_rows.append(
+            AiUsageRow(
+                client_id=uuid.UUID(cid) if cid else None,
+                month=month,
+                calls=b["calls"],
+                input_tokens=b["input"],
+                output_tokens=b["output"],
+                estimated_cost_usd=_estimated_cost(price_table, per_model),
+            )
+        )
+
+    if (format or "").lower() == "csv":
+        import csv
+        import io
+
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(
+            ["client_id", "month", "calls", "input_tokens", "output_tokens", "estimated_cost_usd"]
+        )
+        for r in out_rows:
+            writer.writerow(
+                [
+                    str(r.client_id) if r.client_id else "",
+                    r.month,
+                    r.calls,
+                    r.input_tokens,
+                    r.output_tokens,
+                    "" if r.estimated_cost_usd is None else r.estimated_cost_usd,
+                ]
+            )
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=ai-usage.csv"},
+        )
+
+    return AiUsageResponse(rows=out_rows)
+
+
+@router.post(
+    "/ai-preview-ack",
+    response_model=AiPreviewAckResponse,
+    summary="Acknowledge the redaction preview for a client (admin)",
+)
+def ai_preview_ack(
+    body: AiPreviewAckRequest,
+    admin: Annotated[User, _admin_required],
+    db: Annotated[Session, Depends(get_db)],
+) -> AiPreviewAckResponse:
+    """Record that an admin has reviewed the redaction preview for a client
+    (H-6). This audit row unlocks live (non-preview) AI runs for the client;
+    fixture mode never requires it."""
+    if db.get(Client, body.client_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found.")
+    audit(
+        db,
+        action=AI_PREVIEW_ACK_ACTION,
+        target_type="client",
+        target_id=body.client_id,
+        actor_user_id=admin.id,
+        details={"acknowledged_by": str(admin.id)},
+    )
+    db.commit()
+    return AiPreviewAckResponse(client_id=body.client_id, acknowledged=True)

@@ -54,6 +54,15 @@ class CapabilityItemResponse(BaseModel):
     locked: bool = False
 
 
+class ParseReportResponse(BaseModel):
+    """Inventory parse metadata surfaced by the extract endpoint (C-3)."""
+
+    sheet_used: str | None = None
+    rows_parsed: int = 0
+    rows_skipped: int = 0
+    truncated: bool = False
+
+
 class CapabilityListResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -67,6 +76,9 @@ class CapabilityListResponse(BaseModel):
     # True when the source inventory exceeded the parser row cap and the tail
     # was dropped before extraction (C-1). Only set by the extract endpoint.
     truncated: bool = False
+    # Structured parse metadata (C-3): which sheet was used, how many rows were
+    # parsed/skipped, and whether the input was truncated. Only set by extract.
+    parse_report: ParseReportResponse | None = None
 
 
 class CapabilityItemPatch(BaseModel):
@@ -84,6 +96,10 @@ class CapabilityItemPatch(BaseModel):
     annual_cost_usd: float | None = None
     license_count: int | None = None
     notes: str | None = None
+    # Bounded to the documented 0-100 range (C-4). Note: a content edit clears
+    # confidence (the row becomes human-curated); an explicit confidence_pct in
+    # the same patch is applied after that clear.
+    confidence_pct: int | None = Field(default=None, ge=0, le=100)
     disposition: CapabilityDisposition | None = None
     disposition_rationale: str | None = Field(default=None, max_length=4000)
     consolidation_target_id: uuid.UUID | None = None

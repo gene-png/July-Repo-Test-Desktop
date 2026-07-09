@@ -20,11 +20,13 @@ The client's `invoke(...)` method:
 
 from __future__ import annotations
 
+import threading
 import time
 import uuid
 from collections.abc import Callable
 from typing import Any, Literal, Protocol
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.redact import RedactionMode, redact_payload
@@ -33,6 +35,34 @@ from app.logging import correlation_id_var, get_logger
 from app.models.llm_call import LLMCall, LLMCallMode, LLMCallStatus
 
 _log = get_logger(__name__)
+
+# H-6: the audit action recorded when an admin acknowledges the redaction
+# preview for a client. A live (non-preview) AI run for that client is gated on
+# the existence of such a row.
+AI_PREVIEW_ACK_ACTION = "ai_preview_ack"
+
+
+def has_preview_ack(db: Session, client_id: uuid.UUID) -> bool:
+    """True when a redaction-preview acknowledgment exists for this client (H-6).
+
+    Queried on the caller's session; matches any audit row whose action is
+    ``ai_preview_ack`` and whose target is the client. One ack unlocks all live
+    runs for that client (a per-client, not per-run, gate).
+    """
+    from app.models.audit_entry import AuditEntry
+
+    return (
+        db.execute(
+            select(AuditEntry.id)
+            .where(
+                AuditEntry.action == AI_PREVIEW_ACK_ACTION,
+                AuditEntry.target_id == client_id,
+            )
+            .limit(1)
+        ).first()
+        is not None
+    )
+
 
 # Default output-token ceiling for jobs that don't override it (Task S1-A A-3).
 # Large jobs (the full ATT&CK map, the full CSF playbook) pass max_tokens=128000
@@ -54,6 +84,19 @@ class LLMConfigurationError(RuntimeError):
         super().__init__(message)
         self.reason = reason
         self.message = message
+
+
+class LLMTimeoutError(RuntimeError):
+    """The provider call exceeded the whole-call deadline (Task S2-A E-1).
+
+    Raised BEFORE any result is applied, so a timed-out run leaves no state
+    change. The route layer / shared exception handler maps it to 504 with the
+    user-facing message "the AI call timed out; nothing was changed".
+    """
+
+    def __init__(self, timeout_seconds: int) -> None:
+        super().__init__(f"AI call exceeded the {timeout_seconds}s deadline")
+        self.timeout_seconds = timeout_seconds
 
 
 def anthropic_sdk_available() -> bool:
@@ -263,6 +306,35 @@ class LLMClient:
         s = settings or get_settings()
         return cls(_build_provider(s), s)
 
+    @property
+    def mode(self) -> LLMMode:
+        """The configured LLM mode ("fixture" | "live"). Surfaced on run-ai
+        responses (E-5) so the UI can badge simulated output, and used to gate
+        the H-6 live-run acknowledgment."""
+        return self._settings.shield_llm_mode
+
+    def preview(
+        self,
+        *,
+        purpose: str,
+        inputs: dict[str, Any],
+        redaction_mode: RedactionMode | None = None,
+        client_org_name: str | None = None,
+        name_hints: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        """H-6 redaction preview: run the SAME redaction ``invoke`` would run and
+        return the redacted payload + removed-item counts WITHOUT calling the
+        provider and WITHOUT writing an llm_calls row. The ``purpose`` is accepted
+        for symmetry with ``invoke`` but does not affect redaction."""
+        mode = redaction_mode or self._settings.shield_redaction_mode  # type: ignore[assignment]
+        cleaned_payload, removed_counts = redact_payload(
+            inputs,
+            mode=mode,
+            client_org_name=client_org_name,
+            name_hints=name_hints,
+        )
+        return {"redacted_payload": cleaned_payload, "redaction_summary": removed_counts}
+
     def invoke(
         self,
         db: Session,
@@ -272,6 +344,7 @@ class LLMClient:
         payload: dict[str, Any],
         requested_by: uuid.UUID,
         service_id: uuid.UUID | None = None,
+        client_id: uuid.UUID | None = None,
         prompt_version: str = "v1",
         redaction_mode: RedactionMode | None = None,
         client_org_name: str | None = None,
@@ -283,6 +356,8 @@ class LLMClient:
 
         `model`/`max_tokens` are optional per-job overrides threaded from the
         AIJob; None inherits the provider's configured model / DEFAULT_MAX_TOKENS.
+        `client_id` (H-5) is the tenant the call is billed to; captured on the
+        row for per-client usage aggregation.
         """
         mode = redaction_mode or self._settings.shield_redaction_mode  # type: ignore[assignment]
         cleaned_payload, removed_counts = redact_payload(
@@ -296,8 +371,17 @@ class LLMClient:
             LLMCallMode.FIXTURE if self._settings.shield_llm_mode == "fixture" else LLMCallMode.LIVE
         )
 
+        # E-2: the audit row lives in its OWN short-lived session on the same
+        # engine, committed independently of the request transaction. A crash or
+        # rollback of the caller's transaction (including an E-1 timeout that
+        # abandons the request session) still leaves a durable llm_calls record.
+        # We bind to db.get_bind() so it targets the same database as the caller
+        # without needing the request connection (which E-1 releases during the
+        # provider call).
+        audit_db = Session(bind=db.get_bind(), autoflush=False, expire_on_commit=False, future=True)
         row = LLMCall(
             service_id=service_id,
+            client_id=client_id,
             purpose=purpose,
             prompt_version=prompt_version,
             provider=self.provider.name,
@@ -308,23 +392,41 @@ class LLMClient:
             redacted_counts=removed_counts or None,
             correlation_id=correlation_id_var.get(),
         )
-        db.add(row)
-        db.flush()
+        audit_db.add(row)
+        audit_db.commit()  # RUNNING is durable before the provider call.
 
         # Pass the purpose into the fixture so tests can register per-purpose
         # responses. Real providers ignore it.
         send_payload = {**cleaned_payload, "__purpose__": purpose}
 
+        from app.models._common import utcnow as _utcnow
+
         started = time.monotonic()
         try:
-            response = self.provider.complete(
+            response = self._complete_with_deadline(
                 prompt, send_payload, model=model, max_tokens=max_tokens
             )
+        except LLMTimeoutError as exc:
+            row.status = LLMCallStatus.FAILED
+            row.error_message = f"{type(exc).__name__}: {exc}"
+            row.duration_ms = int((time.monotonic() - started) * 1000)
+            row.completed_at = _utcnow()
+            audit_db.commit()
+            audit_db.close()
+            _log.error(
+                "llm_call_timeout",
+                purpose=purpose,
+                provider=self.provider.name,
+                timeout_seconds=exc.timeout_seconds,
+            )
+            raise
         except Exception as exc:  # noqa: BLE001 - boundary; log + record + re-raise
             row.status = LLMCallStatus.FAILED
             row.error_message = f"{type(exc).__name__}: {exc}"
             row.duration_ms = int((time.monotonic() - started) * 1000)
-            db.flush()
+            row.completed_at = _utcnow()
+            audit_db.commit()
+            audit_db.close()
             _log.error(
                 "llm_call_failed",
                 purpose=purpose,
@@ -337,10 +439,9 @@ class LLMClient:
         row.input_tokens = response.input_tokens
         row.output_tokens = response.output_tokens
         row.duration_ms = int((time.monotonic() - started) * 1000)
-        from app.models._common import utcnow as _utcnow
-
         row.completed_at = _utcnow()
-        db.flush()
+        audit_db.commit()
+        audit_db.close()
 
         _log.info(
             "llm_call_completed",
@@ -352,6 +453,44 @@ class LLMClient:
             redacted=removed_counts,
         )
         return response, row
+
+    def _complete_with_deadline(
+        self,
+        prompt: str,
+        send_payload: dict[str, Any],
+        *,
+        model: str | None,
+        max_tokens: int | None,
+    ) -> LLMResponse:
+        """Run provider.complete under a whole-call deadline (E-1).
+
+        The provider call runs in a daemon worker thread joined with the
+        configured timeout. On expiry the worker is abandoned (it can only ever
+        return an LLMResponse to this method; it never touches request state), and
+        LLMTimeoutError is raised so the caller applies nothing.
+        """
+        timeout = self._settings.shield_llm_timeout_seconds
+        if not timeout or timeout <= 0:
+            return self.provider.complete(prompt, send_payload, model=model, max_tokens=max_tokens)
+
+        box: dict[str, Any] = {}
+
+        def _worker() -> None:
+            try:
+                box["response"] = self.provider.complete(
+                    prompt, send_payload, model=model, max_tokens=max_tokens
+                )
+            except BaseException as exc:  # noqa: BLE001 - relayed to the caller thread
+                box["error"] = exc
+
+        worker = threading.Thread(target=_worker, name="llm-complete", daemon=True)
+        worker.start()
+        worker.join(timeout)
+        if worker.is_alive():
+            raise LLMTimeoutError(timeout)
+        if "error" in box:
+            raise box["error"]
+        return box["response"]
 
 
 LLMMode = Literal["fixture", "live"]

@@ -12,7 +12,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -24,6 +24,11 @@ _JSON_LIST = JSON().with_variant(JSONB, "postgresql")
 
 class RiskRegister(UUIDPKMixin, TimestampMixin, Base):
     __tablename__ = "risk_registers"
+    __table_args__ = (
+        # E-3: one register per (client, version); guards against a double
+        # generate racing two rows onto the same version number.
+        UniqueConstraint("client_id", "version", name="uq_risk_registers_client_version"),
+    )
 
     client_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("client.id", ondelete="CASCADE"), nullable=False, index=True

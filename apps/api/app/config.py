@@ -11,6 +11,13 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# H-5: default per-model price table (USD per million tokens, input/output).
+# Unknown models fall through to a null estimated cost in the usage report.
+_DEFAULT_LLM_PRICE_TABLE: dict[str, dict[str, float]] = {
+    "claude-sonnet-5": {"in": 3.0, "out": 15.0},
+    "claude-haiku-4-5": {"in": 0.8, "out": 4.0},
+}
+
 Environment = Literal["development", "staging", "production"]
 RedactionMode = Literal["strict", "standard", "off"]
 LLMProvider = Literal["anthropic", "openai", "azure_openai", "bedrock", "gemini", "local"]
@@ -53,6 +60,26 @@ class Settings(BaseSettings):
     shield_llm_model: str = "claude-sonnet-5"
     shield_llm_mode: Literal["fixture", "live"] = "fixture"
     anthropic_api_key: str = ""
+    # E-1: whole-call deadline for a single AI run. The provider.complete call is
+    # wrapped in a worker thread joined with this timeout; on expiry the run-ai
+    # route returns 504 and nothing is applied. 0 disables the deadline.
+    shield_llm_timeout_seconds: int = Field(default=300, ge=0)
+    # H-5: per-model price table (USD per million tokens). {model: {"in": x,
+    # "out": y}}. Drives the estimated cost in GET /admin/ai-usage; a model not
+    # present here yields a null cost estimate for its rows.
+    shield_llm_price_table: dict[str, dict[str, float]] = Field(
+        default_factory=lambda: dict(_DEFAULT_LLM_PRICE_TABLE)
+    )
+
+    # G-3: opt-in flag that permits an otherwise-forbidden production +
+    # fixture-LLM configuration (a scripted demo/showcase). "1" enables it; any
+    # other value keeps the guard armed. Sourced from env SHIELD_DEMO.
+    shield_demo: str = ""
+
+    # H-2: rate limits. Auth endpoints are keyed per-IP; AI run endpoints are
+    # keyed per-user. 0 disables the limiter for that class.
+    shield_rate_limit_auth_per_min: int = Field(default=10, ge=0)
+    shield_rate_limit_ai_per_min: int = Field(default=6, ge=0)
 
     # Bootstrap admin service account. When email+password are set, the app
     # provisions exactly one admin with this email at startup (idempotent);
@@ -107,6 +134,16 @@ class Settings(BaseSettings):
             )
         if self.is_production() and self.jwt_signing_secret.startswith("dev-only"):
             raise RuntimeError("JWT_SIGNING_SECRET is still the default placeholder in production.")
+        # G-3: production must run real AI. Fixture mode ships deterministic
+        # canned answers, so a production deployment left in fixture mode would
+        # silently serve simulated analysis as if it were real. Allow it only
+        # for an explicit, acknowledged demo (SHIELD_DEMO=1).
+        if self.is_production() and self.shield_llm_mode == "fixture" and self.shield_demo != "1":
+            raise RuntimeError(
+                "SHIELD_LLM_MODE=fixture is forbidden when ENVIRONMENT=production "
+                "(simulated AI in production). Set SHIELD_LLM_MODE=live, or set "
+                "SHIELD_DEMO=1 to explicitly allow a fixture-mode demo."
+            )
 
 
 @lru_cache(maxsize=1)

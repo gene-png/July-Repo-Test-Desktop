@@ -84,6 +84,13 @@ def create_app() -> FastAPI:
     app.add_middleware(CorrelationIdMiddleware)
     register_exception_handlers(app)
 
+    # H-2: rate-limit config + bucket store live on app.state so each app
+    # instance (including per-test TestClients) is isolated. The store itself is
+    # built lazily on first limited request (Redis if reachable, else in-memory).
+    app.state.rate_limit_auth_per_min = settings.shield_rate_limit_auth_per_min
+    app.state.rate_limit_ai_per_min = settings.shield_rate_limit_ai_per_min
+    app.state.rate_limit_store = None
+
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(intake.router)

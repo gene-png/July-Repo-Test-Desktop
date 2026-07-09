@@ -47,6 +47,34 @@ class AdminAiStatus(BaseModel):
     per_job_overrides: dict[str, AiJobOverride] = {}
 
 
+class AiUsageRow(BaseModel):
+    """One (client, month) usage bucket for GET /admin/ai-usage (H-5)."""
+
+    client_id: uuid.UUID | None
+    month: str  # "YYYY-MM"
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    # Null when any row in the bucket used a model absent from the price table.
+    estimated_cost_usd: float | None
+
+
+class AiUsageResponse(BaseModel):
+    rows: list[AiUsageRow]
+
+
+class AiPreviewAckRequest(BaseModel):
+    """Body of POST /admin/ai-preview-ack: acknowledge the redaction preview for
+    a client so live AI runs are permitted (H-6)."""
+
+    client_id: uuid.UUID
+
+
+class AiPreviewAckResponse(BaseModel):
+    client_id: uuid.UUID
+    acknowledged: bool
+
+
 class AdminUserSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -7,6 +7,16 @@ from dataclasses import dataclass
 from typing import Protocol
 
 
+class StorageUnavailableError(RuntimeError):
+    """Raised when the storage backend is unreachable or misconfigured.
+
+    Distinct from FileNotFoundError (the object is simply missing): this
+    signals a transient/infra problem - bad credentials, a connection
+    timeout, an endpoint that won't answer. Routes map it to a 503 so the
+    caller knows to retry, while a missing object maps to a 410.
+    """
+
+
 @dataclass(frozen=True)
 class StoredObject:
     """Result of a successful put. Carries enough to populate the Artifact row."""

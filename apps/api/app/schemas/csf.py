@@ -303,6 +303,8 @@ class CsfRunAiResponse(BaseModel):
 
     changed: list[CsfDimensionChange]
     rows: list[CsfDimensionScoreResponse]
+    # E-5: "fixture" (simulated) or "live" so the UI can badge simulated output.
+    mode: str = "fixture"
 
 
 class ExportedArtifact(BaseModel):
